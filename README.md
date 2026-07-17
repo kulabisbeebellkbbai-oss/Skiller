@@ -59,4 +59,6 @@ python3 scripts/install_skiller_hooks.py
 
 The installer copies `scripts/skiller_mcp_guard.py` into `~/.codex/hooks/`, installs the `skiller-mcp` skill into `~/.codex/skills/`, backs up and merges `~/.codex/hooks.json`, and enables `skiller-mcp.service` for the current user. After changing hooks, open Codex and run `/hooks` to review and trust the new Skiller entries.
 
+The Skiller preflight hook calls Skiller immediately with `recommend_skills`; the Stop hook is only a backstop for missing evidence and repeated warning/error patterns.
+
 Skiller writes only under its configured data directory. By default that is `./data` in the current working directory. Draft skills and memory notes are stored under `data/drafts/` for review before installing them into a global Codex scope.

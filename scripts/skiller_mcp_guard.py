@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,8 @@ SKILLER_EVIDENCE_RE = re.compile(
     re.IGNORECASE,
 )
 HOOK_PROMPT_RE = re.compile(r"<hook_prompt\b[^>]*>.*?</hook_prompt>", re.IGNORECASE | re.DOTALL)
+ISSUE_LINE_RE = re.compile(r"\b(error|warning|warn|failed|failure|blocked|exception|traceback)\b", re.IGNORECASE)
+VOLATILE_RE = re.compile(r"0x[0-9a-f]+|\b\d{2,}\b|/tmp/[^\s]+|pid=\d+", re.IGNORECASE)
 
 
 def codex_home() -> Path:
@@ -140,6 +143,117 @@ def health_ready() -> bool:
         return False
 
 
+def state_path() -> Path:
+    root = Path(os.environ.get("SKILLER_MCP_GUARD_STATE_DIR", codex_home() / "skiller-mcp-guard"))
+    return root.expanduser() / "state.json"
+
+
+def load_state() -> dict[str, Any]:
+    path = state_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"patterns": {}}
+    return data if isinstance(data, dict) else {"patterns": {}}
+
+
+def save_state(state: dict[str, Any]) -> None:
+    path = state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def normalize_pattern(text: str) -> str:
+    normalized = VOLATILE_RE.sub("<var>", text)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized[:240]
+
+
+def record_pattern(kind: str, detail: str, fix: str) -> tuple[int, bool]:
+    key = f"{kind}:{normalize_pattern(detail)}"
+    state = load_state()
+    patterns = state.setdefault("patterns", {})
+    item = patterns.setdefault(key, {"count": 0, "notified_at_count": 0, "first_seen": None})
+    item["count"] = int(item.get("count", 0)) + 1
+    item["last_seen"] = datetime.now(UTC).isoformat()
+    item["first_seen"] = item.get("first_seen") or item["last_seen"]
+    item["detail"] = detail[:500]
+    item["fix"] = fix
+    count = int(item["count"])
+    should_notify = count >= 2 and int(item.get("notified_at_count", 0)) < count
+    if should_notify:
+        item["notified_at_count"] = count
+    save_state(state)
+    return count, should_notify
+
+
+def parse_sse_json(body: str) -> dict[str, Any]:
+    for line in body.splitlines():
+        if line.startswith("data: "):
+            try:
+                data = json.loads(line[6:])
+            except json.JSONDecodeError:
+                return {}
+            return data if isinstance(data, dict) else {}
+    return {}
+
+
+def skiller_rpc(payload: dict[str, Any]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        SKILLER_ENDPOINT,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+    )
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return parse_sse_json(response.read().decode("utf-8", errors="replace"))
+
+
+def call_skiller_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    skiller_rpc({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "skiller-mcp-guard", "version": "0.1.0"},
+        },
+    })
+    result = skiller_rpc({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    })
+    return result.get("result", {}) if isinstance(result.get("result"), dict) else {}
+
+
+def skiller_preflight(task_description: str) -> str:
+    try:
+        result = call_skiller_tool("recommend_skills", {"task_description": task_description[:2000], "limit": 3})
+        recommendations = result.get("structuredContent", {}).get("result", [])
+        if not recommendations:
+            call_skiller_tool("refresh_skill_catalog", {})
+            result = call_skiller_tool("recommend_skills", {"task_description": task_description[:2000], "limit": 3})
+            recommendations = result.get("structuredContent", {}).get("result", [])
+        if recommendations:
+            names = [str(item.get("skill_name")) for item in recommendations[:3] if isinstance(item, dict)]
+            return f"Skiller MCP preflight ran recommend_skills; candidates: {', '.join(names)}."
+        return "Skiller MCP preflight ran recommend_skills; no prior matching skill was found."
+    except Exception as exc:
+        count, notify = record_pattern(
+            "skiller-preflight-call-failed",
+            f"{type(exc).__name__}: {exc}",
+            "Check skiller-mcp.service health and the Streamable HTTP MCP endpoint.",
+        )
+        if notify:
+            return (
+                "Skiller MCP preflight call is repeatedly failing. There may be a fix: "
+                "check skiller-mcp.service health and the MCP endpoint."
+            )
+        return "Skiller MCP route required, but the preflight tool call failed; Stop hook will enforce evidence."
+
+
 def needs_skiller_prompt(text: str) -> bool:
     return bool(PROMPT_ROUTE_RE.search(text))
 
@@ -178,12 +292,16 @@ def preflight(payload: dict[str, Any]) -> int:
             "systemctl --user start skiller-mcp.service"
         )
     if failures:
+        for failure in failures:
+            record_pattern("skiller-readiness", failure, "Start skiller-mcp.service or register the skiller MCP server.")
         print("skiller_mcp_guard: blocked prompt because Skiller MCP is not ready.", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 2
 
+    preflight_evidence = skiller_preflight(text)
     emit_continue_message(
+        f"{preflight_evidence} "
         "Skiller MCP route required for reusable work. Use skiller.recommend_skills or "
         "refresh_skill_catalog before choosing skills when relevant, then record outcomes with "
         "capture_work_product, record_skill_run, or propose_skill_update before the final answer. "
@@ -206,16 +324,57 @@ def stop_check(payload: dict[str, Any]) -> int:
     evidence_text = "\n".join([assistant_text, tool_text])
 
     if not final_claims_work(user_text, assistant_text):
+        repeated = repeated_issue_message("\n".join(text for _role, text in entries if text))
+        if repeated:
+            print(repeated, file=sys.stderr)
+            return 2
         return 0
     if has_skiller_evidence(evidence_text):
+        repeated = repeated_issue_message("\n".join(text for _role, text in entries if text))
+        if repeated:
+            print(repeated, file=sys.stderr)
+            return 2
         return 0
+    count, notify = record_pattern(
+        "missing-skiller-evidence",
+        user_text[:500],
+        "Use Skiller in preflight and include Skiller MCP evidence before finalizing reusable work.",
+    )
+    extra = ""
+    if notify:
+        extra = (
+            f" This missing-evidence pattern has repeated {count} times; the likely fix is to run Skiller "
+            "before finalizing and include its evidence, or decide to ignore this pattern for now."
+        )
     print(
         "skiller_mcp_guard: blocked final response; use Skiller MCP before finalizing reusable work "
         "and include brief evidence such as skiller.recommend_skills, capture_work_product, "
-        "record_skill_run, propose_skill_update, or a Skiller draft path.",
+        "record_skill_run, propose_skill_update, or a Skiller draft path."
+        f"{extra}",
         file=sys.stderr,
     )
     return 2
+
+
+def repeated_issue_message(text: str) -> str:
+    candidate_lines = []
+    for line in text.splitlines():
+        stripped = strip_hook_prompts(line).strip()
+        if stripped and ISSUE_LINE_RE.search(stripped):
+            candidate_lines.append(stripped)
+    for line in candidate_lines[:5]:
+        count, notify = record_pattern(
+            "warning-or-error",
+            line,
+            "Troubleshoot the repeated warning/error pattern, or explicitly ignore it for now.",
+        )
+        if notify:
+            return (
+                "skiller_mcp_guard: repeated warning/error pattern detected. "
+                f"It has appeared {count} times: {line[:240]} "
+                "There may be a fix; ask the user whether to troubleshoot it now or ignore it for now."
+            )
+    return ""
 
 
 def main() -> int:
@@ -237,4 +396,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

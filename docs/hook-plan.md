@@ -7,6 +7,10 @@ Installed hooks:
 - `scripts/skiller_mcp_guard.py --preflight`: a `UserPromptSubmit` hook that checks whether `skiller` is configured and reachable for prompts likely to produce reusable work, then injects route guidance.
 - `scripts/skiller_mcp_guard.py --stop-check`: a `Stop` hook that blocks completed-work or failure summaries for relevant prompts unless the turn contains Skiller evidence.
 
+The preflight hook calls Skiller immediately with `recommend_skills`, and falls back to `refresh_skill_catalog` plus another recommendation attempt when no match is found. This prevents Skiller from running only after the Stop hook detects missing evidence.
+
+The Stop hook also tracks repeated warning/error patterns in `~/.codex/skiller-mcp-guard/state.json`. It stays quiet for one-off warnings, then blocks with a troubleshooting-or-ignore prompt only when the same pattern repeats and there is likely something to fix.
+
 Install:
 
 ```bash

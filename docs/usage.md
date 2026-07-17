@@ -12,6 +12,8 @@ For persistent local use, install the user service and hooks:
 python3 scripts/install_skiller_hooks.py
 ```
 
+The preflight hook uses Skiller before model work by calling `recommend_skills`, with a catalog refresh fallback when no matching skill is found. The Stop hook remains the backstop for missing final-answer evidence and repeated warning/error patterns.
+
 Run a transport smoke test:
 
 ```bash

@@ -25,6 +25,7 @@ When Skiller results affect the final answer, include brief evidence such as:
 
 ## Tool Routing
 
+- Preflight hooks that enforce Skiller must call Skiller immediately, such as `recommend_skills` or `refresh_skill_catalog`, not only emit guidance for the model to use Skiller later.
 - Use `capture_work_product` after new, different, failed, or guardrail-producing work.
 - Use `record_skill_run` when a named skill was used and the outcome is known.
 - Use `recommend_skills` before work where prior local skill history may affect tool choice.
@@ -32,6 +33,12 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Use `list_skill_catalog` to inspect the indexed skill catalog.
 - Use `propose_skill_update` after a skill fails or only partially works.
 - Use `get_skill_profile` when deciding whether an existing skill needs checks or guardrails.
+
+## Hook Reliability Guardrails
+
+- If a Stop hook repeatedly catches missing Skiller evidence, treat it as a hook-design failure: fix the preflight hook so it uses Skiller before model work.
+- Track repeated warning or error patterns quietly, then notify only when the same pattern repeats and there is a likely fix to troubleshoot or explicitly ignore.
+- Do not spam advisory messages for one-off warnings or errors.
 
 ## Fallback
 
