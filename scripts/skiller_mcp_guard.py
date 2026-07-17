@@ -225,6 +225,35 @@ def record_pattern(kind: str, detail: str, fix: str) -> tuple[int, bool]:
     return count, should_notify
 
 
+def record_owned_enforcement_pattern(detail: str) -> tuple[int, bool]:
+    key = f"owned-enforcement-hook:{normalize_pattern(detail)}"
+    state = load_state()
+    patterns = state.setdefault("patterns", {})
+    item = patterns.setdefault(key, {"count": 0, "notified_at_count": 0, "first_seen": None})
+    item["count"] = int(item.get("count", 0)) + 1
+    item["last_seen"] = datetime.now(UTC).isoformat()
+    item["first_seen"] = item.get("first_seen") or item["last_seen"]
+    item["detail"] = detail[:500]
+    item["fix"] = owned_enforcement_fix(detail)
+    count = int(item["count"])
+    should_notify = count >= 2 and int(item.get("notified_at_count", 0)) < count
+    if should_notify:
+        item["notified_at_count"] = count
+    save_state(state)
+    return count, should_notify
+
+
+def owned_enforcement_fix(detail: str) -> str:
+    if "calculator_mcp_guard" in detail:
+        return (
+            "Calculator guard is repeatedly blocking final answers. Stop reporting derived "
+            "counts unless calculator.search_calculation_methods or another method tool is used in the "
+            "same turn, or adjust calculator_mcp_guard if simple count aggregation should not require "
+            "domain-method evidence."
+        )
+    return "Let the owning enforcement hook surface remediation, but troubleshoot if the same hook repeats."
+
+
 def parse_sse_json(body: str) -> dict[str, Any]:
     for line in body.splitlines():
         if line.startswith("data: "):
@@ -413,11 +442,14 @@ def repeated_issue_message(text: str) -> str:
             candidate_lines.append(stripped)
     for line in candidate_lines[:5]:
         if is_owned_enforcement_hook_line(line):
-            record_pattern(
-                "owned-enforcement-hook",
-                line,
-                "Let the owning enforcement hook surface remediation; Skiller should not cascade-block.",
-            )
+            count, notify = record_owned_enforcement_pattern(line)
+            if notify:
+                return (
+                    "skiller_mcp_guard: repeated owned enforcement-hook diagnostic detected. "
+                    f"It has appeared {count} times: {line[:240]} "
+                    f"Likely fix: {owned_enforcement_fix(line)} "
+                    "Ask the user whether to troubleshoot it now or ignore it for now."
+                )
             continue
         count, notify = record_pattern(
             "warning-or-error",
