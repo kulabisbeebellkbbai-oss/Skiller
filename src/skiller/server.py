@@ -12,6 +12,7 @@ from .models import (
     Outcome,
     SkillCatalogEntry,
     SkillLearning,
+    SkillPolicy,
     SkillProfile,
     SkillRecommendation,
     SkillRun,
@@ -60,6 +61,7 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
         tags: list[str] | None = None,
         reliability_impact: str = "",
         create_drafts: bool = True,
+        user_approved_update: bool = False,
     ) -> CaptureResult:
         """Record a new, variant, guardrail, or failure learning and optionally draft skill/memory files."""
         learning = SkillLearning(
@@ -76,7 +78,11 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
             tags=tags or [],
             reliability_impact=reliability_impact,
         )
-        return store.capture_work_product(learning, create_drafts=create_drafts)
+        return store.capture_work_product(
+            learning,
+            create_drafts=create_drafts,
+            user_approved_update=user_approved_update,
+        )
 
     @mcp.tool()
     def record_skill_run(
@@ -104,9 +110,9 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
         return store.recommend_skills(task_description, limit=limit)
 
     @mcp.tool()
-    def propose_skill_update(skill_name: str) -> SkillProfile:
+    def propose_skill_update(skill_name: str, user_approved_update: bool = False) -> SkillProfile:
         """Summarize recent variants and failures that should become skill guardrails."""
-        return store.propose_skill_update(skill_name)
+        return store.propose_skill_update(skill_name, user_approved_update=user_approved_update)
 
     @mcp.tool()
     def list_recent_learnings(limit: int = 10, skill_name: str | None = None) -> list[SkillLearning]:
@@ -127,5 +133,15 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
     def list_skill_catalog(limit: int = 50, query: str = "") -> list[SkillCatalogEntry]:
         """List indexed skills, optionally filtered by query terms."""
         return store.list_skill_catalog(limit=limit, query=query)
+
+    @mcp.tool()
+    def set_skill_update_policy(skill_name: str, updatable: bool, reason: str = "") -> SkillPolicy:
+        """Mark whether Skiller may draft updates for a skill without explicit user approval."""
+        return store.set_skill_policy(skill_name=skill_name, updatable=updatable, reason=reason)
+
+    @mcp.tool()
+    def list_skill_update_policies() -> list[SkillPolicy]:
+        """List skills with explicit update policies."""
+        return store.list_skill_policies()
 
     return mcp

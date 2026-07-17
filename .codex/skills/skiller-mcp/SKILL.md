@@ -31,8 +31,16 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Use `recommend_skills` before work where prior local skill history may affect tool choice.
 - Use `refresh_skill_catalog` to index installed or project-local `SKILL.md` files before relying on recommendations.
 - Use `list_skill_catalog` to inspect the indexed skill catalog.
+- Use `set_skill_update_policy` to mark skills that Skiller must not draft updates for without explicit user approval.
+- Use `list_skill_update_policies` before drafting updates when protected skills may be involved.
 - Use `propose_skill_update` after a skill fails or only partially works.
 - Use `get_skill_profile` when deciding whether an existing skill needs checks or guardrails.
+
+## Protected Skill Updates
+
+- A skill policy with `updatable=false` means Skiller may record learnings and reliability evidence, but must not draft skill updates or return update guardrails unless the tool call includes explicit `user_approved_update=true`.
+- Treat protected-skill approval as turn-specific; do not infer approval from prior conversations.
+- When a protected update is blocked, report the block and ask for approval before generating drafts.
 
 ## Hook Reliability Guardrails
 

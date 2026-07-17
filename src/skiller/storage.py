@@ -14,6 +14,7 @@ from .models import (
     ReliabilitySummary,
     SkillCatalogEntry,
     SkillLearning,
+    SkillPolicy,
     SkillProfile,
     SkillRecommendation,
     SkillRun,
@@ -29,6 +30,7 @@ class SkillerStore:
         self.learnings_path = data_dir / "learnings.jsonl"
         self.runs_path = data_dir / "skill_runs.jsonl"
         self.catalog_path = data_dir / "skill_catalog.jsonl"
+        self.policies_path = data_dir / "skill_policies.jsonl"
         self.drafts_dir = data_dir / "drafts"
 
     def initialize(self) -> None:
@@ -37,17 +39,36 @@ class SkillerStore:
         self.learnings_path.touch(exist_ok=True)
         self.runs_path.touch(exist_ok=True)
         self.catalog_path.touch(exist_ok=True)
+        self.policies_path.touch(exist_ok=True)
 
-    def capture_work_product(self, learning: SkillLearning, create_drafts: bool = True) -> CaptureResult:
+    def capture_work_product(
+        self,
+        learning: SkillLearning,
+        create_drafts: bool = True,
+        user_approved_update: bool = False,
+    ) -> CaptureResult:
         self.initialize()
         self._append_jsonl(self.learnings_path, learning.model_dump(mode="json"))
         artifacts: list[DraftArtifact] = []
+        policy = self.get_skill_policy(learning.skill_name) if learning.skill_name else None
+        if create_drafts and policy and not policy.updatable and not user_approved_update:
+            return CaptureResult(
+                learning=learning,
+                artifacts=artifacts,
+                message=(
+                    f"Captured learning, but draft update for protected skill '{policy.skill_name}' "
+                    "was blocked pending user approval."
+                ),
+                update_blocked=True,
+                policy=policy,
+            )
         if create_drafts:
             artifacts.extend(self._write_drafts(learning))
         return CaptureResult(
             learning=learning,
             artifacts=artifacts,
             message="Captured learning and generated reviewable drafts." if artifacts else "Captured learning.",
+            policy=policy,
         )
 
     def record_skill_run(self, run: SkillRun) -> ReliabilitySummary:
@@ -106,14 +127,26 @@ class SkillerStore:
                     source=source,
                     description=catalog_entry.description if catalog_entry else "",
                     source_path=catalog_entry.source_path if catalog_entry else "",
+                    updatable=self.is_skill_updatable(skill_name),
                     reliability=reliability,
                 )
             )
 
         return sorted(recommendations, key=lambda item: item.score, reverse=True)[: max(1, min(limit, 10))]
 
-    def propose_skill_update(self, skill_name: str) -> SkillProfile:
+    def propose_skill_update(self, skill_name: str, user_approved_update: bool = False) -> SkillProfile:
         normalized = self._normalize_skill(skill_name)
+        policy = self.get_skill_policy(normalized)
+        if policy and not policy.updatable and not user_approved_update:
+            return SkillProfile(
+                skill_name=normalized,
+                catalog_entry=self.get_catalog_entry(normalized),
+                policy=policy,
+                learnings=self.list_recent_learnings(limit=50, skill_name=normalized),
+                reliability=self.reliability_summary(normalized),
+                suggested_guardrails=[],
+                draft_paths=self._draft_paths(normalized),
+            )
         learnings = self.list_recent_learnings(limit=50, skill_name=normalized)
         guardrails = []
         for learning in learnings:
@@ -125,6 +158,7 @@ class SkillerStore:
         return SkillProfile(
             skill_name=normalized,
             catalog_entry=self.get_catalog_entry(normalized),
+            policy=policy,
             learnings=learnings,
             reliability=self.reliability_summary(normalized),
             suggested_guardrails=deduped,
@@ -152,6 +186,31 @@ class SkillerStore:
 
     def get_skill_profile(self, skill_name: str) -> SkillProfile:
         return self.propose_skill_update(skill_name)
+
+    def set_skill_policy(self, skill_name: str, updatable: bool, reason: str = "") -> SkillPolicy:
+        self.initialize()
+        policy = SkillPolicy(skill_name=skill_name, updatable=updatable, reason=reason)
+        policies = {item.skill_name: item for item in self.list_skill_policies()}
+        policies[policy.skill_name] = policy
+        ordered = [item.model_dump(mode="json") for item in sorted(policies.values(), key=lambda item: item.skill_name)]
+        self._write_jsonl(self.policies_path, ordered)
+        return policy
+
+    def list_skill_policies(self) -> list[SkillPolicy]:
+        return [SkillPolicy.model_validate(item) for item in self._read_jsonl(self.policies_path)]
+
+    def get_skill_policy(self, skill_name: str | None) -> SkillPolicy | None:
+        if not skill_name:
+            return None
+        normalized = self._normalize_skill(skill_name)
+        for policy in self.list_skill_policies():
+            if policy.skill_name == normalized:
+                return policy
+        return None
+
+    def is_skill_updatable(self, skill_name: str) -> bool:
+        policy = self.get_skill_policy(skill_name)
+        return True if policy is None else policy.updatable
 
     def refresh_skill_catalog(self, root_paths: list[str] | None = None) -> CatalogRefreshResult:
         self.initialize()

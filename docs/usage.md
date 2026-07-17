@@ -27,6 +27,8 @@ The default scan roots are:
 - `~/.codex/skills`
 - `.codex/skills`
 
-Skiller stores the indexed catalog in `data/skill_catalog.jsonl`, reliability events in `data/skill_runs.jsonl`, captured learnings in `data/learnings.jsonl`, and reviewable generated artifacts in `data/drafts/`.
+Skiller stores the indexed catalog in `data/skill_catalog.jsonl`, reliability events in `data/skill_runs.jsonl`, captured learnings in `data/learnings.jsonl`, explicit skill update policies in `data/skill_policies.jsonl`, and reviewable generated artifacts in `data/drafts/`.
 
 Skiller does not install generated skills or memory drafts automatically. Review the draft paths returned by `capture_work_product`, then install them through the appropriate Codex scope workflow.
+
+To protect a skill from automatic Skiller draft updates, call `set_skill_update_policy` with `updatable=false`. Skiller will still record learnings for that skill, but `capture_work_product` will not create skill/memory drafts and `propose_skill_update` will not return guardrails unless the call includes `user_approved_update=true`.

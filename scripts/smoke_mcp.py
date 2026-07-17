@@ -26,6 +26,8 @@ async def run_smoke(endpoint: str, health_url: str) -> None:
                 "recommend_skills",
                 "refresh_skill_catalog",
                 "list_skill_catalog",
+                "set_skill_update_policy",
+                "list_skill_update_policies",
             }
             missing = required - names
             if missing:
@@ -33,6 +35,9 @@ async def run_smoke(endpoint: str, health_url: str) -> None:
             result = await session.call_tool("list_skill_catalog", {"limit": 1})
             if result.isError:
                 raise RuntimeError("list_skill_catalog returned an MCP error")
+            policies = await session.call_tool("list_skill_update_policies", {})
+            if policies.isError:
+                raise RuntimeError("list_skill_update_policies returned an MCP error")
     print(f"ok endpoint={endpoint} tools={len(names)}")
 
 
@@ -46,4 +51,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

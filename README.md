@@ -41,6 +41,8 @@ With the server running, validate the MCP transport:
 - `get_skill_profile`: inspect a skill's catalog entry, reliability, guardrails, and drafts.
 - `refresh_skill_catalog`: index existing `SKILL.md` files from Codex skill roots.
 - `list_skill_catalog`: inspect indexed skills.
+- `set_skill_update_policy`: mark a skill as updatable or protected from Skiller draft updates.
+- `list_skill_update_policies`: inspect explicit update policies.
 
 ## Codex MCP Registration
 
@@ -61,4 +63,4 @@ The installer copies `scripts/skiller_mcp_guard.py` into `~/.codex/hooks/`, inst
 
 The Skiller preflight hook calls Skiller immediately with `recommend_skills`; the Stop hook is only a backstop for missing evidence and repeated warning/error patterns.
 
-Skiller writes only under its configured data directory. By default that is `./data` in the current working directory. Draft skills and memory notes are stored under `data/drafts/` for review before installing them into a global Codex scope.
+Skiller writes only under its configured data directory. By default that is `./data` in the current working directory. Draft skills and memory notes are stored under `data/drafts/` for review before installing them into a global Codex scope. Skill update policies are stored in `data/skill_policies.jsonl`; protected skills require `user_approved_update=true` before Skiller drafts updates for them.

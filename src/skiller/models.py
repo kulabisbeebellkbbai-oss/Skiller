@@ -98,6 +98,18 @@ class CatalogRefreshResult(BaseModel):
     entries: list[SkillCatalogEntry]
 
 
+class SkillPolicy(BaseModel):
+    skill_name: str = Field(min_length=2, max_length=120)
+    updatable: bool = True
+    reason: str = Field(default="", max_length=2000)
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    @field_validator("skill_name")
+    @classmethod
+    def normalize_skill_name(cls, value: str) -> str:
+        return value.strip().lower().replace(" ", "-")
+
+
 class DraftArtifact(BaseModel):
     kind: Literal["skill", "memory"]
     path: str
@@ -107,6 +119,8 @@ class CaptureResult(BaseModel):
     learning: SkillLearning
     artifacts: list[DraftArtifact]
     message: str
+    update_blocked: bool = False
+    policy: SkillPolicy | None = None
 
 
 class ReliabilitySummary(BaseModel):
@@ -127,12 +141,14 @@ class SkillRecommendation(BaseModel):
     source: Literal["captured_learning", "catalog", "combined"] = "captured_learning"
     description: str = ""
     source_path: str = ""
+    updatable: bool = True
     reliability: ReliabilitySummary | None = None
 
 
 class SkillProfile(BaseModel):
     skill_name: str
     catalog_entry: SkillCatalogEntry | None = None
+    policy: SkillPolicy | None = None
     learnings: list[SkillLearning]
     reliability: ReliabilitySummary
     suggested_guardrails: list[str]

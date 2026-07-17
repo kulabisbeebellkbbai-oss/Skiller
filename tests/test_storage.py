@@ -111,6 +111,71 @@ def test_propose_skill_update_surfaces_failed_guardrails(tmp_path: Path) -> None
     assert "Avoid first-run failures on empty checkouts." in profile.suggested_guardrails
 
 
+def test_non_updatable_skill_blocks_draft_without_user_approval(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    policy = store.set_skill_policy("critical-skill", updatable=False, reason="Requires maintainer review.")
+
+    result = store.capture_work_product(
+        SkillLearning(
+            title="Critical skill update",
+            summary="This learning should be captured but not drafted without approval.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="critical-skill",
+        )
+    )
+
+    assert policy.updatable is False
+    assert result.update_blocked is True
+    assert result.policy is not None
+    assert result.policy.skill_name == "critical-skill"
+    assert result.artifacts == []
+    assert not list((tmp_path / "drafts").glob("*/skill/critical-skill/SKILL.md"))
+
+
+def test_non_updatable_skill_allows_draft_with_user_approval(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    store.set_skill_policy("critical-skill", updatable=False, reason="Requires maintainer review.")
+
+    result = store.capture_work_product(
+        SkillLearning(
+            title="Critical skill approved update",
+            summary="This learning can draft because explicit user approval was provided.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="critical-skill",
+        ),
+        user_approved_update=True,
+    )
+
+    assert result.update_blocked is False
+    assert {artifact.kind for artifact in result.artifacts} == {"skill", "memory"}
+
+
+def test_propose_skill_update_hides_guardrails_for_protected_skill_without_approval(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    store.set_skill_policy("critical-skill", updatable=False, reason="Requires maintainer review.")
+    store.capture_work_product(
+        SkillLearning(
+            title="Critical failure guardrail",
+            summary="A protected skill failure should not become an update proposal automatically.",
+            novelty=Novelty.FAILURE,
+            outcome=Outcome.FAILED,
+            skill_name="critical-skill",
+            guardrails=["Do not change this without approval."],
+        ),
+        create_drafts=False,
+    )
+
+    blocked = store.propose_skill_update("critical-skill")
+    approved = store.propose_skill_update("critical-skill", user_approved_update=True)
+
+    assert blocked.policy is not None
+    assert blocked.policy.updatable is False
+    assert blocked.suggested_guardrails == []
+    assert approved.suggested_guardrails == ["Do not change this without approval."]
+
+
 def test_server_rejects_non_loopback_host(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="127.0.0.1"):
         create_server(data_dir=tmp_path, host="0.0.0.0")
