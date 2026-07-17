@@ -9,7 +9,7 @@ Installed hooks:
 
 The preflight hook calls Skiller immediately with `recommend_skills`, and falls back to `refresh_skill_catalog` plus another recommendation attempt when no match is found. This prevents Skiller from running only after the Stop hook detects missing evidence.
 
-The Stop hook also tracks repeated warning/error patterns in `~/.codex/skiller-mcp-guard/state.json`. It inspects hook prompts and diagnostic-looking tool output, not ordinary assistant planning prose. It stays quiet for one-off warnings, then blocks with a troubleshooting-or-ignore prompt only when the same pattern repeats and there is likely something to fix.
+The Stop hook also tracks repeated warning/error patterns in `~/.codex/skiller-mcp-guard/state.json`. It inspects hook prompts and diagnostic-looking tool output, not ordinary assistant planning prose, patch hunks, quoted code, diff examples, or Skiller's own repeated-pattern notification text. It stays quiet for one-off warnings, then blocks with a troubleshooting-or-ignore prompt only when the same live diagnostic pattern repeats and there is likely something to fix.
 
 Install:
 

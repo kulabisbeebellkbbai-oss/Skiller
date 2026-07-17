@@ -39,6 +39,7 @@ When Skiller results affect the final answer, include brief evidence such as:
 - If a Stop hook repeatedly catches missing Skiller evidence, treat it as a hook-design failure: fix the preflight hook so it uses Skiller before model work.
 - Track repeated warning or error patterns quietly from hook prompts and diagnostic tool output, not ordinary assistant planning prose.
 - Notify only when the same diagnostic pattern repeats and there is a likely fix to troubleshoot or explicitly ignore.
+- Repeated-pattern detectors must ignore their own notification text plus patch hunks, quoted code, and diff examples; these are not live diagnostics.
 - Do not spam advisory messages for one-off warnings or errors.
 
 ## Fallback

@@ -102,3 +102,24 @@ def test_stop_ignores_repeated_assistant_warning_prose(tmp_path: Path) -> None:
 
     assert first_result.returncode == 0
     assert second_result.returncode == 0
+
+
+def test_stop_ignores_own_repeated_warning_notice_with_diff_text(tmp_path: Path) -> None:
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    state_dir = tmp_path / "state"
+    hook_prompt = (
+        '<hook_prompt hook_run_id="stop:8:/home/god/.codex/hooks.json">'
+        "skiller_mcp_guard: repeated warning/error pattern detected. It has appeared 2 times: '\\n"
+        '+        "skiller_mcp_guard: blocked final response; Warning: hook preflight failed for Skiller."\\n'
+        '+        " There may be a fix; ask the user whether to troubleshoot it now or ignore it for now.'
+        "</hook_prompt>"
+    )
+    write_transcript(first, hook_prompt, "Acknowledged.")
+    write_transcript(second, hook_prompt, "Acknowledged.")
+
+    first_result = run_stop(first, state_dir)
+    second_result = run_stop(second, state_dir)
+
+    assert first_result.returncode == 0
+    assert second_result.returncode == 0

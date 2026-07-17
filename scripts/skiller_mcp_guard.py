@@ -46,6 +46,8 @@ DIAGNOSTIC_PREFIX_RE = re.compile(
     r"^\s*(error|warning|warn|failed|failure|exception|traceback|[a-z0-9_.-]+:\s+(?:error|warning|warn|failed|blocked))\b",
     re.IGNORECASE,
 )
+SELF_REPEAT_NOTICE_RE = re.compile(r"skiller_mcp_guard:\s+repeated warning/error pattern detected", re.IGNORECASE)
+CODE_OR_DIFF_RE = re.compile(r"^\s*(?:[+\-]|@@|```|[\"']|\\n[+\-])")
 VOLATILE_RE = re.compile(r"0x[0-9a-f]+|\b\d{2,}\b|/tmp/[^\s]+|pid=\d+", re.IGNORECASE)
 
 
@@ -367,12 +369,14 @@ def repeated_issue_message(text: str) -> str:
     hook_prompts = HOOK_PROMPT_RE.findall(text)
     for prompt in hook_prompts:
         stripped = re.sub(r"</?hook_prompt[^>]*>", "", prompt).strip()
-        if stripped and ISSUE_LINE_RE.search(stripped):
-            candidate_lines.append(stripped)
+        for line in stripped.splitlines():
+            normalized = line.strip()
+            if is_live_diagnostic_line(normalized):
+                candidate_lines.append(normalized)
     without_hook_prompts = strip_hook_prompts(text)
     for line in without_hook_prompts.splitlines():
         stripped = line.strip()
-        if stripped and DIAGNOSTIC_PREFIX_RE.search(stripped):
+        if is_live_diagnostic_line(stripped):
             candidate_lines.append(stripped)
     for line in candidate_lines[:5]:
         count, notify = record_pattern(
@@ -387,6 +391,16 @@ def repeated_issue_message(text: str) -> str:
                 "There may be a fix; ask the user whether to troubleshoot it now or ignore it for now."
             )
     return ""
+
+
+def is_live_diagnostic_line(line: str) -> bool:
+    if not line:
+        return False
+    if SELF_REPEAT_NOTICE_RE.search(line):
+        return False
+    if CODE_OR_DIFF_RE.search(line):
+        return False
+    return bool(DIAGNOSTIC_PREFIX_RE.search(line))
 
 
 def main() -> int:
