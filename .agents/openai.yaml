@@ -11,6 +11,8 @@ tools:
   - propose_skill_update
   - list_recent_learnings
   - get_skill_profile
+  - refresh_skill_catalog
+  - list_skill_catalog
 evidence:
   required_when_used:
     - tool name
@@ -18,4 +20,3 @@ evidence:
     - artifact path or reliability counts when relevant
 fallback:
   unavailable: Continue without capture, report that Skiller was unavailable, and do not invent records.
-

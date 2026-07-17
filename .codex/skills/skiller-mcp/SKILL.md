@@ -28,6 +28,8 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Use `capture_work_product` after new, different, failed, or guardrail-producing work.
 - Use `record_skill_run` when a named skill was used and the outcome is known.
 - Use `recommend_skills` before work where prior local skill history may affect tool choice.
+- Use `refresh_skill_catalog` to index installed or project-local `SKILL.md` files before relying on recommendations.
+- Use `list_skill_catalog` to inspect the indexed skill catalog.
 - Use `propose_skill_update` after a skill fails or only partially works.
 - Use `get_skill_profile` when deciding whether an existing skill needs checks or guardrails.
 
@@ -40,5 +42,5 @@ If the server is unavailable, continue the task but explicitly say Skiller captu
 ```bash
 codex mcp get skiller
 curl http://127.0.0.1:8794/health
+.venv/bin/python scripts/smoke_mcp.py
 ```
-

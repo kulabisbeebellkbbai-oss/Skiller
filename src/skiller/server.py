@@ -6,7 +6,16 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 
-from .models import CaptureResult, Outcome, SkillLearning, SkillProfile, SkillRecommendation, SkillRun
+from .models import (
+    CaptureResult,
+    CatalogRefreshResult,
+    Outcome,
+    SkillCatalogEntry,
+    SkillLearning,
+    SkillProfile,
+    SkillRecommendation,
+    SkillRun,
+)
 from .storage import SkillerStore
 
 
@@ -108,5 +117,15 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
     def get_skill_profile(skill_name: str) -> SkillProfile:
         """Return captured learnings, reliability, suggested guardrails, and draft paths for a skill."""
         return store.get_skill_profile(skill_name)
+
+    @mcp.tool()
+    def refresh_skill_catalog(root_paths: list[str] | None = None) -> CatalogRefreshResult:
+        """Scan SKILL.md files into Skiller's recommendation catalog."""
+        return store.refresh_skill_catalog(root_paths=root_paths)
+
+    @mcp.tool()
+    def list_skill_catalog(limit: int = 50, query: str = "") -> list[SkillCatalogEntry]:
+        """List indexed skills, optionally filtered by query terms."""
+        return store.list_skill_catalog(limit=limit, query=query)
 
     return mcp

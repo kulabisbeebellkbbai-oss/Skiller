@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import (
+    CatalogRefreshResult,
     CaptureResult,
     DraftArtifact,
     Outcome,
     ReliabilitySummary,
+    SkillCatalogEntry,
     SkillLearning,
     SkillProfile,
     SkillRecommendation,
@@ -25,6 +28,7 @@ class SkillerStore:
         self.data_dir = data_dir
         self.learnings_path = data_dir / "learnings.jsonl"
         self.runs_path = data_dir / "skill_runs.jsonl"
+        self.catalog_path = data_dir / "skill_catalog.jsonl"
         self.drafts_dir = data_dir / "drafts"
 
     def initialize(self) -> None:
@@ -32,6 +36,7 @@ class SkillerStore:
         self.drafts_dir.mkdir(parents=True, exist_ok=True)
         self.learnings_path.touch(exist_ok=True)
         self.runs_path.touch(exist_ok=True)
+        self.catalog_path.touch(exist_ok=True)
 
     def capture_work_product(self, learning: SkillLearning, create_drafts: bool = True) -> CaptureResult:
         self.initialize()
@@ -67,14 +72,20 @@ class SkillerStore:
             if learning.skill_name:
                 grouped.setdefault(learning.skill_name, []).append(learning)
 
+        catalog = {entry.name: entry for entry in self.list_skill_catalog(limit=500)}
+        skill_names = sorted(set(grouped) | set(catalog))
         recommendations: list[SkillRecommendation] = []
-        for skill_name, learnings in grouped.items():
+        for skill_name in skill_names:
+            learnings = grouped.get(skill_name, [])
+            catalog_entry = catalog.get(skill_name)
             combined = " ".join(
                 [skill_name]
                 + [item.title for item in learnings]
                 + [item.summary for item in learnings]
                 + [tag for item in learnings for tag in item.tags]
                 + [step for item in learnings for step in item.reusable_steps]
+                + ([catalog_entry.description] if catalog_entry else [])
+                + (catalog_entry.tags if catalog_entry else [])
             )
             skill_terms = self._terms(combined)
             overlap = task_terms & skill_terms
@@ -82,13 +93,19 @@ class SkillerStore:
                 continue
             reliability = self.reliability_summary(skill_name)
             reliability_bonus = reliability.reliability if reliability.reliability is not None else 0.5
-            score = len(overlap) + reliability_bonus
+            catalog_bonus = 0.25 if catalog_entry else 0
+            learning_bonus = 0.5 if learnings else 0
+            score = len(overlap) + reliability_bonus + catalog_bonus + learning_bonus
+            source = "combined" if catalog_entry and learnings else "catalog" if catalog_entry else "captured_learning"
             reason = f"Matched terms: {', '.join(sorted(overlap)[:8])}"
             recommendations.append(
                 SkillRecommendation(
                     skill_name=skill_name,
                     score=round(score, 3),
                     reason=reason,
+                    source=source,
+                    description=catalog_entry.description if catalog_entry else "",
+                    source_path=catalog_entry.source_path if catalog_entry else "",
                     reliability=reliability,
                 )
             )
@@ -107,6 +124,7 @@ class SkillerStore:
         deduped = list(dict.fromkeys(item for item in guardrails if item))
         return SkillProfile(
             skill_name=normalized,
+            catalog_entry=self.get_catalog_entry(normalized),
             learnings=learnings,
             reliability=self.reliability_summary(normalized),
             suggested_guardrails=deduped,
@@ -134,6 +152,53 @@ class SkillerStore:
 
     def get_skill_profile(self, skill_name: str) -> SkillProfile:
         return self.propose_skill_update(skill_name)
+
+    def refresh_skill_catalog(self, root_paths: list[str] | None = None) -> CatalogRefreshResult:
+        self.initialize()
+        roots = [Path(path).expanduser() for path in (root_paths or self.default_skill_roots())]
+        entries: list[SkillCatalogEntry] = []
+        skipped = 0
+        for root in roots:
+            if not root.exists():
+                skipped += 1
+                continue
+            skill_files = [root] if root.name == "SKILL.md" else sorted(root.glob("**/SKILL.md"))
+            for skill_file in skill_files:
+                parsed = self._parse_skill_file(skill_file)
+                if parsed is None:
+                    skipped += 1
+                    continue
+                entries.append(parsed)
+
+        deduped: dict[tuple[str, str], SkillCatalogEntry] = {}
+        for entry in entries:
+            deduped[(entry.name, entry.source_path)] = entry
+        final_entries = sorted(deduped.values(), key=lambda item: (item.name, item.source_path))
+        self._write_jsonl(self.catalog_path, [entry.model_dump(mode="json") for entry in final_entries])
+        return CatalogRefreshResult(
+            scanned_roots=[str(root) for root in roots],
+            imported=len(final_entries),
+            skipped=skipped,
+            entries=final_entries,
+        )
+
+    def list_skill_catalog(self, limit: int = 50, query: str = "") -> list[SkillCatalogEntry]:
+        entries = [SkillCatalogEntry.model_validate(item) for item in self._read_jsonl(self.catalog_path)]
+        if query:
+            query_terms = self._terms(query)
+            entries = [
+                entry
+                for entry in entries
+                if query_terms & self._terms(" ".join([entry.name, entry.description, " ".join(entry.tags)]))
+            ]
+        return sorted(entries, key=lambda item: item.name)[: max(1, min(limit, 500))]
+
+    def get_catalog_entry(self, skill_name: str) -> SkillCatalogEntry | None:
+        normalized = self._normalize_skill(skill_name)
+        for entry in self.list_skill_catalog(limit=500):
+            if entry.name == normalized:
+                return entry
+        return None
 
     def _write_drafts(self, learning: SkillLearning) -> list[DraftArtifact]:
         skill_name = learning.skill_name or self._slug(learning.title)
@@ -211,10 +276,62 @@ Use this skill when a task matches the captured context below and the workflow i
             matches.append(str(path))
         return sorted(matches)
 
+    def _parse_skill_file(self, skill_file: Path) -> SkillCatalogEntry | None:
+        try:
+            text = skill_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = skill_file.read_text(encoding="utf-8", errors="ignore")
+        if not text.strip():
+            return None
+        frontmatter = self._frontmatter(text)
+        name = frontmatter.get("name") or skill_file.parent.name
+        description = frontmatter.get("description") or self._first_paragraph(text)
+        tags = sorted(self._terms(" ".join([name, description])) & self._terms(text))
+        return SkillCatalogEntry(
+            name=name,
+            description=description,
+            source_path=str(skill_file.resolve()),
+            tags=tags[:20],
+            updated_at=datetime.now(UTC).isoformat(),
+        )
+
+    @staticmethod
+    def default_skill_roots() -> list[str]:
+        return [str(Path.home() / ".codex" / "skills"), ".codex/skills"]
+
+    @staticmethod
+    def _frontmatter(text: str) -> dict[str, str]:
+        if not text.startswith("---\n"):
+            return {}
+        try:
+            _, block, _rest = text.split("---", 2)
+        except ValueError:
+            return {}
+        values: dict[str, str] = {}
+        for line in block.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            values[key.strip()] = value.strip().strip('"').strip("'")
+        return values
+
+    @staticmethod
+    def _first_paragraph(text: str) -> str:
+        paragraphs = [part.strip() for part in text.split("\n\n") if part.strip() and not part.startswith("---")]
+        if not paragraphs:
+            return ""
+        return re.sub(r"\s+", " ", paragraphs[0].replace("#", "")).strip()[:2000]
+
     @staticmethod
     def _append_jsonl(path: Path, payload: dict) -> None:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+    @staticmethod
+    def _write_jsonl(path: Path, payloads: list[dict]) -> None:
+        with path.open("w", encoding="utf-8") as handle:
+            for payload in payloads:
+                handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
     @staticmethod
     def _read_jsonl(path: Path) -> list[dict]:
@@ -240,4 +357,3 @@ Use this skill when a task matches the captured context below and the workflow i
     def _terms(value: str) -> set[str]:
         stop_words = {"and", "the", "for", "with", "from", "that", "this", "when", "into", "then", "they"}
         return {word for word in WORD_RE.findall(value.lower()) if len(word) > 2 and word not in stop_words}
-

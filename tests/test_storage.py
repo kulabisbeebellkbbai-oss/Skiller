@@ -63,6 +63,33 @@ def test_recommend_skills_uses_learning_terms_and_reliability(tmp_path: Path) ->
     assert recommendations[0].reliability.reliability == 1.0
 
 
+def test_refresh_skill_catalog_indexes_existing_skills(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "markitdown-mcp"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: markitdown-mcp
+description: Convert PDF, DOCX, and other documents to Markdown through the local MCP server.
+---
+
+# MarkItDown MCP
+
+Use for PDF and document conversion.
+""",
+        encoding="utf-8",
+    )
+    store = SkillerStore(tmp_path / "data")
+
+    result = store.refresh_skill_catalog([str(tmp_path / "skills")])
+    recommendations = store.recommend_skills("convert a pdf document to markdown", limit=3)
+
+    assert result.imported == 1
+    assert recommendations
+    assert recommendations[0].skill_name == "markitdown-mcp"
+    assert recommendations[0].source == "catalog"
+    assert recommendations[0].source_path.endswith("SKILL.md")
+
+
 def test_propose_skill_update_surfaces_failed_guardrails(tmp_path: Path) -> None:
     store = SkillerStore(tmp_path)
     store.capture_work_product(
@@ -87,4 +114,3 @@ def test_propose_skill_update_surfaces_failed_guardrails(tmp_path: Path) -> None
 def test_server_rejects_non_loopback_host(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="127.0.0.1"):
         create_server(data_dir=tmp_path, host="0.0.0.0")
-

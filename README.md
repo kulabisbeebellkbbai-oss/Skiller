@@ -25,6 +25,23 @@ Health endpoint: `http://127.0.0.1:8794/health`
 .venv/bin/python -m pytest
 ```
 
+With the server running, validate the MCP transport:
+
+```bash
+.venv/bin/python scripts/smoke_mcp.py
+```
+
+## Tools
+
+- `capture_work_product`: record reusable new, variant, guardrail, or failure learnings.
+- `record_skill_run`: append reliability evidence for a skill invocation.
+- `recommend_skills`: rank captured or indexed skills for a task.
+- `propose_skill_update`: summarize failures and variants that should become guardrails.
+- `list_recent_learnings`: inspect recent captured learning records.
+- `get_skill_profile`: inspect a skill's catalog entry, reliability, guardrails, and drafts.
+- `refresh_skill_catalog`: index existing `SKILL.md` files from Codex skill roots.
+- `list_skill_catalog`: inspect indexed skills.
+
 ## Codex MCP Registration
 
 ```bash

@@ -73,6 +73,31 @@ class SkillRun(BaseModel):
         return [item.strip() for item in value if item and item.strip()]
 
 
+class SkillCatalogEntry(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    source_path: str = Field(min_length=1, max_length=1000)
+    tags: list[str] = Field(default_factory=list, max_length=40)
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        return value.strip().lower().replace(" ", "-")
+
+    @field_validator("tags")
+    @classmethod
+    def strip_tags(cls, value: list[str]) -> list[str]:
+        return [item.strip().lower() for item in value if item and item.strip()]
+
+
+class CatalogRefreshResult(BaseModel):
+    scanned_roots: list[str]
+    imported: int
+    skipped: int
+    entries: list[SkillCatalogEntry]
+
+
 class DraftArtifact(BaseModel):
     kind: Literal["skill", "memory"]
     path: str
@@ -99,11 +124,15 @@ class SkillRecommendation(BaseModel):
     skill_name: str
     score: float
     reason: str
+    source: Literal["captured_learning", "catalog", "combined"] = "captured_learning"
+    description: str = ""
+    source_path: str = ""
     reliability: ReliabilitySummary | None = None
 
 
 class SkillProfile(BaseModel):
     skill_name: str
+    catalog_entry: SkillCatalogEntry | None = None
     learnings: list[SkillLearning]
     reliability: ReliabilitySummary
     suggested_guardrails: list[str]
@@ -111,4 +140,3 @@ class SkillProfile(BaseModel):
 
 
 JsonDict = dict[str, Any]
-
