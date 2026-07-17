@@ -42,6 +42,10 @@ SKILLER_EVIDENCE_RE = re.compile(
 )
 HOOK_PROMPT_RE = re.compile(r"<hook_prompt\b[^>]*>.*?</hook_prompt>", re.IGNORECASE | re.DOTALL)
 ISSUE_LINE_RE = re.compile(r"\b(error|warning|warn|failed|failure|blocked|exception|traceback)\b", re.IGNORECASE)
+DIAGNOSTIC_PREFIX_RE = re.compile(
+    r"^\s*(error|warning|warn|failed|failure|exception|traceback|[a-z0-9_.-]+:\s+(?:error|warning|warn|failed|blocked))\b",
+    re.IGNORECASE,
+)
 VOLATILE_RE = re.compile(r"0x[0-9a-f]+|\b\d{2,}\b|/tmp/[^\s]+|pid=\d+", re.IGNORECASE)
 
 
@@ -322,15 +326,17 @@ def stop_check(payload: dict[str, Any]) -> int:
     assistant_text = strip_hook_prompts("\n".join(text for role, text in entries if role == "assistant" and text))
     tool_text = "\n".join(text for role, text in entries if role == "tool" and text)
     evidence_text = "\n".join([assistant_text, tool_text])
+    hook_prompt_text = "\n".join(HOOK_PROMPT_RE.findall("\n".join(text for _role, text in entries if text)))
+    diagnostic_text = "\n".join([tool_text, hook_prompt_text])
 
     if not final_claims_work(user_text, assistant_text):
-        repeated = repeated_issue_message("\n".join(text for _role, text in entries if text))
+        repeated = repeated_issue_message(diagnostic_text)
         if repeated:
             print(repeated, file=sys.stderr)
             return 2
         return 0
     if has_skiller_evidence(evidence_text):
-        repeated = repeated_issue_message("\n".join(text for _role, text in entries if text))
+        repeated = repeated_issue_message(diagnostic_text)
         if repeated:
             print(repeated, file=sys.stderr)
             return 2
@@ -358,9 +364,15 @@ def stop_check(payload: dict[str, Any]) -> int:
 
 def repeated_issue_message(text: str) -> str:
     candidate_lines = []
-    for line in text.splitlines():
-        stripped = strip_hook_prompts(line).strip()
+    hook_prompts = HOOK_PROMPT_RE.findall(text)
+    for prompt in hook_prompts:
+        stripped = re.sub(r"</?hook_prompt[^>]*>", "", prompt).strip()
         if stripped and ISSUE_LINE_RE.search(stripped):
+            candidate_lines.append(stripped)
+    without_hook_prompts = strip_hook_prompts(text)
+    for line in without_hook_prompts.splitlines():
+        stripped = line.strip()
+        if stripped and DIAGNOSTIC_PREFIX_RE.search(stripped):
             candidate_lines.append(stripped)
     for line in candidate_lines[:5]:
         count, notify = record_pattern(

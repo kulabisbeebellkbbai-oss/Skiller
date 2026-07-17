@@ -73,8 +73,13 @@ def test_stop_notifies_on_repeated_warning_pattern(tmp_path: Path) -> None:
     first = tmp_path / "first.jsonl"
     second = tmp_path / "second.jsonl"
     state_dir = tmp_path / "state"
-    write_transcript(first, "What happened?", "Warning: hook preflight failed for Skiller.")
-    write_transcript(second, "What happened?", "Warning: hook preflight failed for Skiller.")
+    hook_prompt = (
+        '<hook_prompt hook_run_id="stop:8:/home/god/.codex/hooks.json">'
+        "skiller_mcp_guard: blocked final response; Warning: hook preflight failed for Skiller."
+        "</hook_prompt>"
+    )
+    write_transcript(first, hook_prompt, "Acknowledged.")
+    write_transcript(second, hook_prompt, "Acknowledged.")
 
     first_result = run_stop(first, state_dir)
     second_result = run_stop(second, state_dir)
@@ -82,3 +87,18 @@ def test_stop_notifies_on_repeated_warning_pattern(tmp_path: Path) -> None:
     assert first_result.returncode == 0
     assert second_result.returncode == 2
     assert "repeated warning/error pattern" in second_result.stderr
+
+
+def test_stop_ignores_repeated_assistant_warning_prose(tmp_path: Path) -> None:
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    state_dir = tmp_path / "state"
+    prose = "I will add a quiet repeated-warning detector and keep it from bugging the user."
+    write_transcript(first, "What will you change?", prose)
+    write_transcript(second, "What will you change?", prose)
+
+    first_result = run_stop(first, state_dir)
+    second_result = run_stop(second, state_dir)
+
+    assert first_result.returncode == 0
+    assert second_result.returncode == 0

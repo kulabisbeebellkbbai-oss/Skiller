@@ -37,7 +37,8 @@ When Skiller results affect the final answer, include brief evidence such as:
 ## Hook Reliability Guardrails
 
 - If a Stop hook repeatedly catches missing Skiller evidence, treat it as a hook-design failure: fix the preflight hook so it uses Skiller before model work.
-- Track repeated warning or error patterns quietly, then notify only when the same pattern repeats and there is a likely fix to troubleshoot or explicitly ignore.
+- Track repeated warning or error patterns quietly from hook prompts and diagnostic tool output, not ordinary assistant planning prose.
+- Notify only when the same diagnostic pattern repeats and there is a likely fix to troubleshoot or explicitly ignore.
 - Do not spam advisory messages for one-off warnings or errors.
 
 ## Fallback
