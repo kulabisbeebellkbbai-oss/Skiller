@@ -48,6 +48,7 @@ DIAGNOSTIC_PREFIX_RE = re.compile(
 )
 SELF_REPEAT_NOTICE_RE = re.compile(r"skiller_mcp_guard:\s+repeated warning/error pattern detected", re.IGNORECASE)
 CODE_OR_DIFF_RE = re.compile(r"^\s*(?:[+\-]|@@|```|[\"']|\\n[+\-])")
+SYNTHETIC_TEST_PATTERN_RE = re.compile(r"Warning:\s+hook preflight failed for Skiller", re.IGNORECASE)
 VOLATILE_RE = re.compile(r"0x[0-9a-f]+|\b\d{2,}\b|/tmp/[^\s]+|pid=\d+", re.IGNORECASE)
 
 
@@ -160,7 +161,34 @@ def load_state() -> dict[str, Any]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {"patterns": {}}
-    return data if isinstance(data, dict) else {"patterns": {}}
+    if not isinstance(data, dict):
+        return {"patterns": {}}
+    pruned, changed = prune_stale_patterns(data)
+    if changed:
+        save_state(pruned)
+    return pruned
+
+
+def prune_stale_patterns(state: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    patterns = state.get("patterns")
+    if not isinstance(patterns, dict):
+        state["patterns"] = {}
+        return state, True
+    stale = []
+    for key, item in patterns.items():
+        detail = ""
+        if isinstance(item, dict):
+            detail = str(item.get("detail") or "")
+        material = "\n".join([str(key), detail])
+        if (
+            SELF_REPEAT_NOTICE_RE.search(material)
+            or CODE_OR_DIFF_RE.search(detail)
+            or SYNTHETIC_TEST_PATTERN_RE.search(material)
+        ):
+            stale.append(key)
+    for key in stale:
+        patterns.pop(key, None)
+    return state, bool(stale)
 
 
 def save_state(state: dict[str, Any]) -> None:
@@ -317,6 +345,7 @@ def preflight(payload: dict[str, Any]) -> int:
 
 
 def stop_check(payload: dict[str, Any]) -> int:
+    load_state()
     transcript = payload.get("transcript_path")
     if not transcript:
         return 0

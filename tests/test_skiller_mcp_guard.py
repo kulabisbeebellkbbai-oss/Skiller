@@ -75,7 +75,7 @@ def test_stop_notifies_on_repeated_warning_pattern(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     hook_prompt = (
         '<hook_prompt hook_run_id="stop:8:/home/god/.codex/hooks.json">'
-        "skiller_mcp_guard: blocked final response; Warning: hook preflight failed for Skiller."
+        "external_hook: Warning: service health check failed."
         "</hook_prompt>"
     )
     write_transcript(first, hook_prompt, "Acknowledged.")
@@ -123,3 +123,42 @@ def test_stop_ignores_own_repeated_warning_notice_with_diff_text(tmp_path: Path)
 
     assert first_result.returncode == 0
     assert second_result.returncode == 0
+
+
+def test_stop_prunes_stale_self_notice_patterns(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout.jsonl"
+    state_dir = tmp_path / "state"
+    state_path = state_dir / "state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "patterns": {
+                    "warning-or-error:skiller_mcp_guard: repeated warning/error pattern detected": {
+                        "count": 2,
+                        "notified_at_count": 2,
+                        "detail": "skiller_mcp_guard: repeated warning/error pattern detected. It has appeared 2 times.",
+                    },
+                    "warning-or-error:+ diff warning line": {
+                        "count": 2,
+                        "notified_at_count": 2,
+                        "detail": '+ "skiller_mcp_guard: blocked final response; Warning: hook preflight failed"',
+                    },
+                    "warning-or-error:skiller_mcp_guard: blocked final response; Warning: hook preflight failed for Skiller.": {
+                        "count": 2,
+                        "notified_at_count": 2,
+                        "detail": "skiller_mcp_guard: blocked final response; Warning: hook preflight failed for Skiller.",
+                    },
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    write_transcript(transcript, "What is Skiller?", "Skiller is an MCP server.")
+
+    result = run_stop(transcript, state_dir)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert result.returncode == 0
+    assert state["patterns"] == {}

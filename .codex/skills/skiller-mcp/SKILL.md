@@ -40,6 +40,7 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Track repeated warning or error patterns quietly from hook prompts and diagnostic tool output, not ordinary assistant planning prose.
 - Notify only when the same diagnostic pattern repeats and there is a likely fix to troubleshoot or explicitly ignore.
 - Repeated-pattern detectors must ignore their own notification text plus patch hunks, quoted code, and diff examples; these are not live diagnostics.
+- When detector rules change, migrate or prune stale state entries at hook startup so old false positives do not keep firing after the code is fixed.
 - Do not spam advisory messages for one-off warnings or errors.
 
 ## Fallback
