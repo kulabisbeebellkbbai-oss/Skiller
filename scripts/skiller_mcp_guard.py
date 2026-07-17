@@ -264,7 +264,16 @@ def owned_enforcement_fix(detail: str) -> str:
 def stale_calculator_owned_pattern(key: str, fix: str) -> bool:
     if not key.startswith("owned-enforcement-hook:calculator_mcp_guard"):
         return False
-    return "count aggregation" in fix or "simple count aggregation" in fix
+    return active_calculator_guard_has_metadata_exemption() or "count aggregation" in fix or "simple count aggregation" in fix
+
+
+def active_calculator_guard_has_metadata_exemption() -> bool:
+    path = codex_home() / "hooks" / "calculator_mcp_guard.py"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return False
+    return "COUNT_OR_HOOK_META_RE" in text and "requires_method_evidence" in text
 
 
 def stale_warning_pattern(key: str, detail: str) -> bool:
@@ -463,6 +472,8 @@ def repeated_issue_message(text: str) -> str:
             candidate_lines.append(stripped)
     for line in candidate_lines[:5]:
         if is_owned_enforcement_hook_line(line):
+            if is_fixed_calculator_guard_line(line):
+                continue
             count, notify = record_owned_enforcement_pattern(line)
             if notify:
                 return (
@@ -488,6 +499,10 @@ def repeated_issue_message(text: str) -> str:
 
 def is_owned_enforcement_hook_line(line: str) -> bool:
     return bool(OWNED_ENFORCEMENT_HOOK_RE.search(line))
+
+
+def is_fixed_calculator_guard_line(line: str) -> bool:
+    return "calculator_mcp_guard" in line and active_calculator_guard_has_metadata_exemption()
 
 
 def is_live_diagnostic_line(line: str) -> bool:

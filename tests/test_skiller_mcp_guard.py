@@ -22,11 +22,19 @@ def write_transcript(path: Path, user: str, assistant: str, tool: str = "") -> N
     path.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8")
 
 
-def run_stop(transcript: Path, state_dir: Path | None = None) -> subprocess.CompletedProcess[str]:
+def run_stop(
+    transcript: Path,
+    state_dir: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     payload = json.dumps({"transcript_path": str(transcript)})
     env = None
-    if state_dir is not None:
-        env = {**os.environ, "SKILLER_MCP_GUARD_STATE_DIR": str(state_dir)}
+    if state_dir is not None or extra_env:
+        env = {**os.environ}
+        if state_dir is not None:
+            env["SKILLER_MCP_GUARD_STATE_DIR"] = str(state_dir)
+        if extra_env:
+            env.update(extra_env)
     return subprocess.run(
         ["python3", str(SCRIPT), "--from-stdin", "--stop-check"],
         input=payload,
@@ -95,7 +103,7 @@ def test_stop_notifies_on_repeated_owned_enforcement_hook(tmp_path: Path) -> Non
     state_dir = tmp_path / "state"
     hook_prompt = (
         '<hook_prompt hook_run_id="stop:6:/home/god/.codex/hooks.json">'
-        "calculator_mcp_guard: blocked final response; use the calculator MCP server and include appropriate MCP evidence."
+        "mcp_usage_guard: blocked final response; include MCP evidence."
         "</hook_prompt>"
     )
     write_transcript(first, hook_prompt, "Acknowledged.")
@@ -107,7 +115,38 @@ def test_stop_notifies_on_repeated_owned_enforcement_hook(tmp_path: Path) -> Non
     assert first_result.returncode == 0
     assert second_result.returncode == 2
     assert "repeated owned enforcement-hook diagnostic" in second_result.stderr
-    assert "hook/count metadata exemption" in second_result.stderr
+    assert "owning enforcement hook" in second_result.stderr
+
+
+def test_stop_ignores_calculator_guard_when_active_guard_has_metadata_exemption(tmp_path: Path) -> None:
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    state_dir = tmp_path / "state"
+    codex_home = tmp_path / "codex-home"
+    hooks_dir = codex_home / "hooks"
+    hooks_dir.mkdir(parents=True)
+    (hooks_dir / "calculator_mcp_guard.py").write_text(
+        "COUNT_OR_HOOK_META_RE = object()\n"
+        "def requires_method_evidence(user_text, assistant_text):\n"
+        "    return False\n",
+        encoding="utf-8",
+    )
+    hook_prompt = (
+        '<hook_prompt hook_run_id="stop:6:/home/god/.codex/hooks.json">'
+        "calculator_mcp_guard: blocked final response; use the calculator MCP server."
+        "</hook_prompt>"
+    )
+    write_transcript(first, hook_prompt, "Acknowledged.")
+    write_transcript(second, hook_prompt, "Acknowledged.")
+
+    first_result = run_stop(first, state_dir, {"CODEX_HOME": str(codex_home)})
+    second_result = run_stop(second, state_dir, {"CODEX_HOME": str(codex_home)})
+    state_path = state_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"patterns": {}}
+
+    assert first_result.returncode == 0
+    assert second_result.returncode == 0
+    assert state["patterns"] == {}
 
 
 def test_stop_ignores_repeated_assistant_warning_prose(tmp_path: Path) -> None:
