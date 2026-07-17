@@ -1,17 +1,20 @@
-# Hook Plan
+# Hook Plan And Install
 
-Skiller is currently packaged with repo-local guidance only. No global hook is installed by this checkout.
+Skiller ships a user-scope installer for the hooks needed to ensure Skiller is used for reusable work.
 
-Recommended future hooks after review:
+Installed hooks:
 
-- `skiller-mcp-preflight.py`: a `UserPromptSubmit` hook that checks whether `skiller` is configured and reachable for prompts about creating, improving, or recording skills and memories.
-- `skiller-mcp-evidence-guard.py`: a `Stop` hook that requires final answers to mention Skiller evidence when the turn claims a skill or memory draft was captured through Skiller.
+- `scripts/skiller_mcp_guard.py --preflight`: a `UserPromptSubmit` hook that checks whether `skiller` is configured and reachable for prompts likely to produce reusable work, then injects route guidance.
+- `scripts/skiller_mcp_guard.py --stop-check`: a `Stop` hook that blocks completed-work or failure summaries for relevant prompts unless the turn contains Skiller evidence.
 
-Both hooks should be copied into `~/.codex/hooks/` only after review and trust through `/hooks`. They should check `http://127.0.0.1:8794/health`, avoid printing local data, and provide exact remediation:
+Install:
 
 ```bash
 cd "/home/god/Documents/Codex Workspace/Skiller"
-.venv/bin/skiller serve --host 127.0.0.1 --port 8794 --data-dir data
-codex mcp add skiller --transport streamable_http http://127.0.0.1:8794/mcp
+codex mcp add skiller --url http://127.0.0.1:8794/mcp
+python3 scripts/install_skiller_hooks.py
 ```
 
+The installer copies the hook to `~/.codex/hooks/skiller_mcp_guard.py`, copies the skill to `~/.codex/skills/skiller-mcp`, creates a timestamped backup of `~/.codex/hooks.json`, merges the `UserPromptSubmit` and `Stop` hook entries, and enables `~/.config/systemd/user/skiller-mcp.service`.
+
+After installation, run `/hooks` in Codex and trust the changed Skiller hook entries.

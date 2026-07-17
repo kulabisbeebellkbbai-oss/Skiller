@@ -43,4 +43,5 @@ If the server is unavailable, continue the task but explicitly say Skiller captu
 codex mcp get skiller
 curl http://127.0.0.1:8794/health
 .venv/bin/python scripts/smoke_mcp.py
+python3 scripts/install_skiller_hooks.py --dry-run
 ```

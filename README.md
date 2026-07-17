@@ -45,8 +45,18 @@ With the server running, validate the MCP transport:
 ## Codex MCP Registration
 
 ```bash
-codex mcp add skiller --transport streamable_http http://127.0.0.1:8794/mcp
+codex mcp add skiller --url http://127.0.0.1:8794/mcp
 codex mcp get skiller
 ```
+
+## User-Scope Hooks
+
+Install the Skiller route/evidence hooks and loopback user service:
+
+```bash
+python3 scripts/install_skiller_hooks.py
+```
+
+The installer copies `scripts/skiller_mcp_guard.py` into `~/.codex/hooks/`, installs the `skiller-mcp` skill into `~/.codex/skills/`, backs up and merges `~/.codex/hooks.json`, and enables `skiller-mcp.service` for the current user. After changing hooks, open Codex and run `/hooks` to review and trust the new Skiller entries.
 
 Skiller writes only under its configured data directory. By default that is `./data` in the current working directory. Draft skills and memory notes are stored under `data/drafts/` for review before installing them into a global Codex scope.
