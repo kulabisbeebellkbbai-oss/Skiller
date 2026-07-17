@@ -46,7 +46,10 @@ DIAGNOSTIC_PREFIX_RE = re.compile(
     r"^\s*(error|warning|warn|failed|failure|exception|traceback|[a-z0-9_.-]+:\s+(?:error|warning|warn|failed|blocked))\b",
     re.IGNORECASE,
 )
-SELF_REPEAT_NOTICE_RE = re.compile(r"skiller_mcp_guard:\s+repeated warning/error pattern detected", re.IGNORECASE)
+SELF_REPEAT_NOTICE_RE = re.compile(
+    r"skiller_mcp_guard:\s+repeated (?:warning/error pattern|owned enforcement-hook diagnostic) detected",
+    re.IGNORECASE,
+)
 OWNED_ENFORCEMENT_HOOK_RE = re.compile(
     r"\b(calculator_mcp_guard|mcp_usage_guard|skill-version-guard|skill_version_guard|skill-memory-hook)\b",
     re.IGNORECASE,
@@ -183,11 +186,16 @@ def prune_stale_patterns(state: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         detail = ""
         if isinstance(item, dict):
             detail = str(item.get("detail") or "")
-        material = "\n".join([str(key), detail])
+        fix = ""
+        if isinstance(item, dict):
+            fix = str(item.get("fix") or "")
+        material = "\n".join([str(key), detail, fix])
         if (
             SELF_REPEAT_NOTICE_RE.search(material)
             or CODE_OR_DIFF_RE.search(detail)
             or SYNTHETIC_TEST_PATTERN_RE.search(material)
+            or stale_calculator_owned_pattern(str(key), fix)
+            or stale_warning_pattern(str(key), detail)
         ):
             stale.append(key)
     for key in stale:
@@ -246,12 +254,25 @@ def record_owned_enforcement_pattern(detail: str) -> tuple[int, bool]:
 def owned_enforcement_fix(detail: str) -> str:
     if "calculator_mcp_guard" in detail:
         return (
-            "Calculator guard is repeatedly blocking final answers. Stop reporting derived "
-            "counts unless calculator.search_calculation_methods or another method tool is used in the "
-            "same turn, or adjust calculator_mcp_guard if simple count aggregation should not require "
-            "domain-method evidence."
+            "Calculator guard is repeatedly blocking final answers. First confirm the active "
+            "calculator_mcp_guard.py contains the hook/count metadata exemption; if it does, inspect "
+            "the transcript for a real contextual calculation that still needs method evidence."
         )
     return "Let the owning enforcement hook surface remediation, but troubleshoot if the same hook repeats."
+
+
+def stale_calculator_owned_pattern(key: str, fix: str) -> bool:
+    if not key.startswith("owned-enforcement-hook:calculator_mcp_guard"):
+        return False
+    return "count aggregation" in fix or "simple count aggregation" in fix
+
+
+def stale_warning_pattern(key: str, detail: str) -> bool:
+    if not key.startswith("warning-or-error:"):
+        return False
+    if "calculator_mcp_guard" in key or "calculator_mcp_guard" in detail:
+        return True
+    return not is_live_diagnostic_line(detail)
 
 
 def parse_sse_json(body: str) -> dict[str, Any]:

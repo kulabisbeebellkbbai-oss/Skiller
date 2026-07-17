@@ -107,7 +107,7 @@ def test_stop_notifies_on_repeated_owned_enforcement_hook(tmp_path: Path) -> Non
     assert first_result.returncode == 0
     assert second_result.returncode == 2
     assert "repeated owned enforcement-hook diagnostic" in second_result.stderr
-    assert "calculator.search_calculation_methods" in second_result.stderr
+    assert "hook/count metadata exemption" in second_result.stderr
 
 
 def test_stop_ignores_repeated_assistant_warning_prose(tmp_path: Path) -> None:
@@ -146,6 +146,27 @@ def test_stop_ignores_own_repeated_warning_notice_with_diff_text(tmp_path: Path)
     assert second_result.returncode == 0
 
 
+def test_stop_ignores_own_repeated_owned_notice(tmp_path: Path) -> None:
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    state_dir = tmp_path / "state"
+    hook_prompt = (
+        '<hook_prompt hook_run_id="stop:8:/home/god/.codex/hooks.json">'
+        "skiller_mcp_guard: repeated owned enforcement-hook diagnostic detected. "
+        "It has appeared 2 times: calculator_mcp_guard: blocked final response; "
+        "use the calculator MCP server. Likely fix: Calculator guard is repeatedly blocking final answers."
+        "</hook_prompt>"
+    )
+    write_transcript(first, hook_prompt, "Acknowledged.")
+    write_transcript(second, hook_prompt, "Acknowledged.")
+
+    first_result = run_stop(first, state_dir)
+    second_result = run_stop(second, state_dir)
+
+    assert first_result.returncode == 0
+    assert second_result.returncode == 0
+
+
 def test_stop_prunes_stale_self_notice_patterns(tmp_path: Path) -> None:
     transcript = tmp_path / "rollout.jsonl"
     state_dir = tmp_path / "state"
@@ -169,6 +190,27 @@ def test_stop_prunes_stale_self_notice_patterns(tmp_path: Path) -> None:
                         "count": 2,
                         "notified_at_count": 2,
                         "detail": "skiller_mcp_guard: blocked final response; Warning: hook preflight failed for Skiller.",
+                    },
+                    "owned-enforcement-hook:calculator_mcp_guard: blocked final response; use the calculator MCP server.": {
+                        "count": 2,
+                        "notified_at_count": 2,
+                        "detail": "calculator_mcp_guard: blocked final response; use the calculator MCP server.",
+                        "fix": "Calculator guard is repeatedly blocking final answers. Stop reporting derived counts unless calculator.search_calculation_methods or another method tool is used in the same turn, or adjust calculator_mcp_guard if simple count aggregation should not require domain-method evidence.",
+                    },
+                    "owned-enforcement-hook:skiller_mcp_guard: repeated owned enforcement-hook diagnostic detected": {
+                        "count": 2,
+                        "notified_at_count": 2,
+                        "detail": "skiller_mcp_guard: repeated owned enforcement-hook diagnostic detected. It has appeared 2 times.",
+                    },
+                    "warning-or-error:I will fix the hook and add a quiet repeated-warning detector.": {
+                        "count": 2,
+                        "notified_at_count": 2,
+                        "detail": "I will fix the hook and add a quiet repeated-warning detector.",
+                    },
+                    "warning-or-error:calculator_mcp_guard: blocked final response; use the calculator MCP server.": {
+                        "count": 2,
+                        "notified_at_count": 2,
+                        "detail": "calculator_mcp_guard: blocked final response; use the calculator MCP server.",
                     },
                 }
             }
