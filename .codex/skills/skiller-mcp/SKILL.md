@@ -41,6 +41,7 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Notify only when the same diagnostic pattern repeats and there is a likely fix to troubleshoot or explicitly ignore.
 - Repeated-pattern detectors must ignore their own notification text plus patch hunks, quoted code, and diff examples; these are not live diagnostics.
 - When detector rules change, migrate or prune stale state entries at hook startup so old false positives do not keep firing after the code is fixed.
+- Do not cascade-block on diagnostics owned by another enforcement hook such as `calculator_mcp_guard`; record the pattern quietly and let the owning hook surface its remediation.
 - Do not spam advisory messages for one-off warnings or errors.
 
 ## Fallback

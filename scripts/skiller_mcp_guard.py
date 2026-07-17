@@ -47,6 +47,10 @@ DIAGNOSTIC_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 SELF_REPEAT_NOTICE_RE = re.compile(r"skiller_mcp_guard:\s+repeated warning/error pattern detected", re.IGNORECASE)
+OWNED_ENFORCEMENT_HOOK_RE = re.compile(
+    r"\b(calculator_mcp_guard|mcp_usage_guard|skill-version-guard|skill_version_guard|skill-memory-hook)\b",
+    re.IGNORECASE,
+)
 CODE_OR_DIFF_RE = re.compile(r"^\s*(?:[+\-]|@@|```|[\"']|\\n[+\-])")
 SYNTHETIC_TEST_PATTERN_RE = re.compile(r"Warning:\s+hook preflight failed for Skiller", re.IGNORECASE)
 VOLATILE_RE = re.compile(r"0x[0-9a-f]+|\b\d{2,}\b|/tmp/[^\s]+|pid=\d+", re.IGNORECASE)
@@ -408,6 +412,13 @@ def repeated_issue_message(text: str) -> str:
         if is_live_diagnostic_line(stripped):
             candidate_lines.append(stripped)
     for line in candidate_lines[:5]:
+        if is_owned_enforcement_hook_line(line):
+            record_pattern(
+                "owned-enforcement-hook",
+                line,
+                "Let the owning enforcement hook surface remediation; Skiller should not cascade-block.",
+            )
+            continue
         count, notify = record_pattern(
             "warning-or-error",
             line,
@@ -420,6 +431,10 @@ def repeated_issue_message(text: str) -> str:
                 "There may be a fix; ask the user whether to troubleshoot it now or ignore it for now."
             )
     return ""
+
+
+def is_owned_enforcement_hook_line(line: str) -> bool:
+    return bool(OWNED_ENFORCEMENT_HOOK_RE.search(line))
 
 
 def is_live_diagnostic_line(line: str) -> bool:

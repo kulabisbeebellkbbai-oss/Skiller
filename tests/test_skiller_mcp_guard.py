@@ -89,6 +89,25 @@ def test_stop_notifies_on_repeated_warning_pattern(tmp_path: Path) -> None:
     assert "repeated warning/error pattern" in second_result.stderr
 
 
+def test_stop_records_but_does_not_block_owned_enforcement_hook_repeats(tmp_path: Path) -> None:
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    state_dir = tmp_path / "state"
+    hook_prompt = (
+        '<hook_prompt hook_run_id="stop:6:/home/god/.codex/hooks.json">'
+        "calculator_mcp_guard: blocked final response; use the calculator MCP server and include appropriate MCP evidence."
+        "</hook_prompt>"
+    )
+    write_transcript(first, hook_prompt, "Acknowledged.")
+    write_transcript(second, hook_prompt, "Acknowledged.")
+
+    first_result = run_stop(first, state_dir)
+    second_result = run_stop(second, state_dir)
+
+    assert first_result.returncode == 0
+    assert second_result.returncode == 0
+
+
 def test_stop_ignores_repeated_assistant_warning_prose(tmp_path: Path) -> None:
     first = tmp_path / "first.jsonl"
     second = tmp_path / "second.jsonl"
