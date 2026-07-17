@@ -1,0 +1,21 @@
+name: skiller
+service:
+  type: mcp
+  transport: streamable_http
+  endpoint: http://127.0.0.1:8794/mcp
+  health: http://127.0.0.1:8794/health
+tools:
+  - capture_work_product
+  - record_skill_run
+  - recommend_skills
+  - propose_skill_update
+  - list_recent_learnings
+  - get_skill_profile
+evidence:
+  required_when_used:
+    - tool name
+    - affected skill name
+    - artifact path or reliability counts when relevant
+fallback:
+  unavailable: Continue without capture, report that Skiller was unavailable, and do not invent records.
+
