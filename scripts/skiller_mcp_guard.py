@@ -50,6 +50,15 @@ SELF_REPEAT_NOTICE_RE = re.compile(
     r"skiller_mcp_guard:\s+repeated (?:warning/error pattern|owned enforcement-hook diagnostic) detected",
     re.IGNORECASE,
 )
+SELF_BLOCK_NOTICE_RE = re.compile(
+    r"skiller_mcp_guard:\s+blocked final response; use Skiller MCP before finalizing reusable work",
+    re.IGNORECASE,
+)
+OWNED_BLOCK_NOTICE_RE = re.compile(
+    r"(?:mcp_usage_guard|calculator_mcp_guard|skill-version-guard|skill_version_guard|"
+    r"skill-memory-hook|overseer_project_guard):\s+blocked final response;",
+    re.IGNORECASE,
+)
 OWNED_ENFORCEMENT_HOOK_RE = re.compile(
     r"\b(calculator_mcp_guard|mcp_usage_guard|skill-version-guard|skill_version_guard|skill-memory-hook)\b",
     re.IGNORECASE,
@@ -192,6 +201,8 @@ def prune_stale_patterns(state: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         material = "\n".join([str(key), detail, fix])
         if (
             SELF_REPEAT_NOTICE_RE.search(material)
+            or SELF_BLOCK_NOTICE_RE.search(material)
+            or OWNED_BLOCK_NOTICE_RE.search(material)
             or CODE_OR_DIFF_RE.search(detail)
             or SYNTHETIC_TEST_PATTERN_RE.search(material)
             or stale_calculator_owned_pattern(str(key), fix)
@@ -509,6 +520,10 @@ def is_live_diagnostic_line(line: str) -> bool:
     if not line:
         return False
     if SELF_REPEAT_NOTICE_RE.search(line):
+        return False
+    if SELF_BLOCK_NOTICE_RE.search(line):
+        return False
+    if OWNED_BLOCK_NOTICE_RE.search(line):
         return False
     if CODE_OR_DIFF_RE.search(line):
         return False

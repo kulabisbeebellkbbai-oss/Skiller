@@ -97,7 +97,7 @@ def test_stop_notifies_on_repeated_warning_pattern(tmp_path: Path) -> None:
     assert "repeated warning/error pattern" in second_result.stderr
 
 
-def test_stop_notifies_on_repeated_owned_enforcement_hook(tmp_path: Path) -> None:
+def test_stop_ignores_owned_enforcement_hook_blocker(tmp_path: Path) -> None:
     first = tmp_path / "first.jsonl"
     second = tmp_path / "second.jsonl"
     state_dir = tmp_path / "state"
@@ -113,9 +113,29 @@ def test_stop_notifies_on_repeated_owned_enforcement_hook(tmp_path: Path) -> Non
     second_result = run_stop(second, state_dir)
 
     assert first_result.returncode == 0
-    assert second_result.returncode == 2
-    assert "repeated owned enforcement-hook diagnostic" in second_result.stderr
-    assert "owning enforcement hook" in second_result.stderr
+    assert second_result.returncode == 0
+    assert not (state_dir / "state.json").exists()
+
+
+def test_stop_ignores_overseer_guard_blocker_after_owner_handles_it(tmp_path: Path) -> None:
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    state_dir = tmp_path / "state"
+    hook_prompt = (
+        '<hook_prompt hook_run_id="stop:9:/home/god/.codex/hooks.json">'
+        "overseer_project_guard: blocked final response; shared local resource work needs "
+        "Overseer evidence. Use the overseer-local-coordination skill."
+        "</hook_prompt>"
+    )
+    write_transcript(first, hook_prompt, "Overseer evidence: service-status ok.")
+    write_transcript(second, hook_prompt, "Overseer evidence: service-status ok.")
+
+    first_result = run_stop(first, state_dir)
+    second_result = run_stop(second, state_dir)
+
+    assert first_result.returncode == 0
+    assert second_result.returncode == 0
+    assert not (state_dir / "state.json").exists()
 
 
 def test_stop_ignores_calculator_guard_when_active_guard_has_metadata_exemption(tmp_path: Path) -> None:
@@ -250,6 +270,11 @@ def test_stop_prunes_stale_self_notice_patterns(tmp_path: Path) -> None:
                         "count": 2,
                         "notified_at_count": 2,
                         "detail": "calculator_mcp_guard: blocked final response; use the calculator MCP server.",
+                    },
+                    "warning-or-error:overseer_project_guard: blocked final response; shared local resource work needs Overseer evidence.": {
+                        "count": 2,
+                        "notified_at_count": 2,
+                        "detail": "overseer_project_guard: blocked final response; shared local resource work needs Overseer evidence.",
                     },
                 }
             }
