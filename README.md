@@ -38,6 +38,7 @@ With the server running, validate the MCP transport:
 - `get_learning_lineage`: inspect a learning's root, parent, child, and correction records.
 - `scan_learning_lineage`: infer related learning chains across existing records and optionally link them.
 - `lineage_scan_due`: decide whether a periodic scanner run is due from new-learning count or elapsed time.
+- `review_skill_effectiveness`: measure attributed guidance outcomes, recurring pitfalls, and recommend a bounded review cadence.
 - `record_skill_run`: append reliability evidence for a skill invocation.
 - `recommend_skills`: rank captured or indexed skills for a task.
 - `propose_skill_update`: summarize failures and variants that should become guardrails.
@@ -64,6 +65,12 @@ python3 scripts/install_skiller_hooks.py
 ```
 
 The installer copies `scripts/skiller_mcp_guard.py` into `~/.codex/hooks/`, installs the `skiller-mcp` skill into `~/.codex/skills/`, backs up and merges `~/.codex/hooks.json`, and enables `skiller-mcp.service` for the current user. After changing hooks, open Codex and run `/hooks` to review and trust the new Skiller entries.
+
+The installer also enables record-driven lineage maintenance through a systemd
+path unit and retains a periodic timer as a quiet-period fallback. The adaptive
+review records its decisions in `data/effectiveness_reviews.jsonl`. Supply
+`guidance_learning_ids` and `pitfalls_avoided` when recording a skill run so
+guidance effectiveness can be attributed rather than inferred.
 
 The Skiller preflight hook calls Skiller immediately with `recommend_skills`; the Stop hook is only a backstop for missing evidence and repeated warning/error patterns.
 

@@ -63,3 +63,10 @@ For unattended maintenance, use:
 ```
 
 This wrapper first calls the due check and skips unless the new-learning threshold or time threshold is reached. `scripts/install_skiller_hooks.py` installs a user systemd timer for this wrapper by default.
+
+The installed maintenance service uses `run_adaptive_review.py`. A systemd path
+unit reacts to learning and skill-run records, while a periodic timer provides a
+quiet-period fallback. Each invocation records an effectiveness review, chooses
+bounded count and age thresholds from current activity and regressions, and runs
+the conservative lineage scan only when due. For attributable results, callers
+should pass `guidance_learning_ids` and `pitfalls_avoided` to `record_skill_run`.

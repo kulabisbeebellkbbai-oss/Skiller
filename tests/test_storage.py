@@ -63,6 +63,51 @@ def test_recommend_skills_uses_learning_terms_and_reliability(tmp_path: Path) ->
     assert recommendations[0].reliability.reliability == 1.0
 
 
+def test_effectiveness_review_tracks_attributed_guidance_and_recurring_pitfalls(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    store.record_skill_run(
+        SkillRun(
+            skill_name="safe-workflow",
+            task="Use the corrected workflow.",
+            outcome=Outcome.WORKED,
+            guidance_learning_ids=["learning.corrected"],
+            pitfalls_avoided=["Skipped required approval"],
+        )
+    )
+    store.record_skill_run(
+        SkillRun(
+            skill_name="safe-workflow",
+            task="A later run repeated the pitfall.",
+            outcome=Outcome.FAILED,
+            failure_mode="Skipped required approval",
+            guidance_learning_ids=["learning.corrected"],
+        )
+    )
+
+    review = store.review_effectiveness()
+
+    assert review.attributed_runs == 2
+    assert review.guidance_worked == 1
+    assert review.guidance_regressed == 1
+    assert review.pitfalls_avoided == 1
+    assert review.recurring_pitfalls == ["Skipped required approval"]
+    assert review.schedule_mode == "hybrid"
+    assert (tmp_path / "effectiveness_reviews.jsonl").exists()
+
+
+def test_effectiveness_review_prefers_time_fallback_when_activity_is_quiet(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    store.initialize()
+    store.review_effectiveness()
+
+    review = store.review_effectiveness()
+
+    assert review.new_learnings_since_review == 0
+    assert review.new_runs_since_review == 0
+    assert review.schedule_mode == "time_based"
+    assert review.recommended_check_minutes == 360
+
+
 def test_refresh_skill_catalog_indexes_existing_skills(tmp_path: Path) -> None:
     skill_dir = tmp_path / "skills" / "markitdown-mcp"
     skill_dir.mkdir(parents=True)

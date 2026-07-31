@@ -18,6 +18,7 @@ HOOK_NAME = "skiller_mcp_guard.py"
 SERVICE_NAME = "skiller-mcp.service"
 LINEAGE_SERVICE_NAME = "skiller-lineage-scan.service"
 LINEAGE_TIMER_NAME = "skiller-lineage-scan.timer"
+LINEAGE_PATH_NAME = "skiller-lineage-scan.path"
 
 
 def load_hooks(path: Path) -> dict[str, Any]:
@@ -81,34 +82,47 @@ WantedBy=default.target
     return service_path
 
 
-def install_lineage_timer(service_dir: Path, python_bin: Path, data_dir: Path) -> tuple[Path, Path]:
+def install_lineage_timer(service_dir: Path, python_bin: Path, data_dir: Path) -> tuple[Path, Path, Path]:
     service_dir.mkdir(parents=True, exist_ok=True)
     service_path = service_dir / LINEAGE_SERVICE_NAME
     timer_path = service_dir / LINEAGE_TIMER_NAME
-    scanner_path = PROJECT_ROOT / "scripts" / "run_lineage_scan.py"
+    path_path = service_dir / LINEAGE_PATH_NAME
+    scanner_path = PROJECT_ROOT / "scripts" / "run_adaptive_review.py"
     service_text = f"""[Unit]
 Description=Skiller learning lineage scan
 
 [Service]
 Type=oneshot
 WorkingDirectory={PROJECT_ROOT}
-ExecStart="{python_bin}" "{scanner_path}" --data-dir "{data_dir}" --min-new-learnings 10 --max-age-hours 24 --threshold 7.0 --limit 100
+ExecStart="{python_bin}" "{scanner_path}" --data-dir "{data_dir}" --threshold 15.0 --limit 100 --apply
 """
     timer_text = f"""[Unit]
 Description=Run Skiller learning lineage scan periodically
 
 [Timer]
 OnBootSec=15min
-OnUnitActiveSec=1h
+OnUnitActiveSec=6h
 AccuracySec=5min
 Persistent=true
 
 [Install]
 WantedBy=timers.target
 """
+    path_text = f"""[Unit]
+Description=Run Skiller review when learning or reliability records change
+
+[Path]
+PathChanged={data_dir / 'learnings.jsonl'}
+PathChanged={data_dir / 'skill_runs.jsonl'}
+Unit={LINEAGE_SERVICE_NAME}
+
+[Install]
+WantedBy=default.target
+"""
     service_path.write_text(service_text, encoding="utf-8")
     timer_path.write_text(timer_text, encoding="utf-8")
-    return service_path, timer_path
+    path_path.write_text(path_text, encoding="utf-8")
+    return service_path, timer_path, path_path
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -139,6 +153,7 @@ def main() -> int:
     service_path = Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME
     lineage_service_path = Path.home() / ".config" / "systemd" / "user" / LINEAGE_SERVICE_NAME
     lineage_timer_path = Path.home() / ".config" / "systemd" / "user" / LINEAGE_TIMER_NAME
+    lineage_path_path = Path.home() / ".config" / "systemd" / "user" / LINEAGE_PATH_NAME
 
     if args.dry_run:
         print(json.dumps({
@@ -150,6 +165,7 @@ def main() -> int:
             "would_install_service": not args.skip_service,
             "lineage_service_path": str(lineage_service_path),
             "lineage_timer_path": str(lineage_timer_path),
+            "lineage_path_path": str(lineage_path_path),
             "would_install_lineage_timer": not args.skip_lineage_timer,
         }, indent=2))
         return 0
@@ -177,6 +193,7 @@ def main() -> int:
         lineage_timer_result = {
             "daemon_reload": run(["systemctl", "--user", "daemon-reload"]).returncode,
             "enable": run(["systemctl", "--user", "enable", "--now", LINEAGE_TIMER_NAME]).returncode,
+            "path_enable": run(["systemctl", "--user", "enable", "--now", LINEAGE_PATH_NAME]).returncode,
         }
 
     print(json.dumps({
@@ -188,6 +205,7 @@ def main() -> int:
         "service_result": service_result,
         "lineage_service": str(lineage_service_path) if not args.skip_lineage_timer else None,
         "lineage_timer": str(lineage_timer_path) if not args.skip_lineage_timer else None,
+        "lineage_path": str(lineage_path_path) if not args.skip_lineage_timer else None,
         "lineage_timer_result": lineage_timer_result,
         "review": "Run /hooks and trust the changed Skiller hook entries.",
     }, indent=2))

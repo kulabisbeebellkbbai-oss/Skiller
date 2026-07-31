@@ -32,6 +32,7 @@ async def run_smoke(endpoint: str, health_url: str) -> None:
                 "get_learning_lineage",
                 "scan_learning_lineage",
                 "lineage_scan_due",
+                "review_skill_effectiveness",
             }
             missing = required - names
             if missing:

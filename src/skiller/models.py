@@ -83,16 +83,36 @@ class SkillRun(BaseModel):
     failure_mode: str = Field(default="", max_length=1000)
     checks_used: list[str] = Field(default_factory=list, max_length=40)
     notes: str = Field(default="", max_length=2000)
+    guidance_learning_ids: list[str] = Field(default_factory=list, max_length=50)
+    pitfalls_avoided: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("skill_name")
     @classmethod
     def normalize_skill_name(cls, value: str) -> str:
         return value.strip().lower().replace(" ", "-")
 
-    @field_validator("checks_used")
+    @field_validator("checks_used", "guidance_learning_ids", "pitfalls_avoided")
     @classmethod
     def strip_checks(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if item and item.strip()]
+
+
+class EffectivenessReview(BaseModel):
+    generated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    runs_reviewed: int
+    attributed_runs: int
+    guidance_worked: int
+    guidance_regressed: int
+    pitfalls_avoided: int
+    recurring_pitfalls: list[str] = Field(default_factory=list, max_length=50)
+    unattributed_runs: int
+    effectiveness: float | None = None
+    schedule_mode: Literal["record_based", "time_based", "hybrid"]
+    recommended_check_minutes: int
+    recommended_new_learning_threshold: int
+    recommended_max_age_hours: int
+    new_learnings_since_review: int
+    new_runs_since_review: int
 
 
 class SkillCatalogEntry(BaseModel):

@@ -135,6 +135,8 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
         failure_mode: str = "",
         checks_used: list[str] | None = None,
         notes: str = "",
+        guidance_learning_ids: list[str] | None = None,
+        pitfalls_avoided: list[str] | None = None,
     ):
         """Append reliability evidence for one skill invocation and return the updated summary."""
         run = SkillRun(
@@ -144,8 +146,15 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
             failure_mode=failure_mode,
             checks_used=checks_used or [],
             notes=notes,
+            guidance_learning_ids=guidance_learning_ids or [],
+            pitfalls_avoided=pitfalls_avoided or [],
         )
         return store.record_skill_run(run)
+
+    @mcp.tool()
+    def review_skill_effectiveness():
+        """Review whether recorded guidance helped or regressed outcomes and recommend cadence."""
+        return store.review_effectiveness()
 
     @mcp.tool()
     def recommend_skills(task_description: str, limit: int = 5) -> list[SkillRecommendation]:

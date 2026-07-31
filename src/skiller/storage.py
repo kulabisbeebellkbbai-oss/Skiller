@@ -10,6 +10,7 @@ from .models import (
     CatalogRefreshResult,
     CaptureResult,
     DraftArtifact,
+    EffectivenessReview,
     LineageLinkCandidate,
     LineageScanResult,
     Outcome,
@@ -34,6 +35,7 @@ class SkillerStore:
         self.catalog_path = data_dir / "skill_catalog.jsonl"
         self.policies_path = data_dir / "skill_policies.jsonl"
         self.lineage_scans_path = data_dir / "lineage_scans.jsonl"
+        self.effectiveness_reviews_path = data_dir / "effectiveness_reviews.jsonl"
         self.drafts_dir = data_dir / "drafts"
 
     def initialize(self) -> None:
@@ -44,6 +46,7 @@ class SkillerStore:
         self.catalog_path.touch(exist_ok=True)
         self.policies_path.touch(exist_ok=True)
         self.lineage_scans_path.touch(exist_ok=True)
+        self.effectiveness_reviews_path.touch(exist_ok=True)
 
     def capture_work_product(
         self,
@@ -81,6 +84,62 @@ class SkillerStore:
         self.initialize()
         self._append_jsonl(self.runs_path, run.model_dump(mode="json"))
         return self.reliability_summary(run.skill_name)
+
+    def review_effectiveness(self) -> EffectivenessReview:
+        """Measure attributed guidance outcomes and recommend a bounded review cadence."""
+        self.initialize()
+        runs = [SkillRun.model_validate(item) for item in self._read_jsonl(self.runs_path)]
+        reviews = self._read_jsonl(self.effectiveness_reviews_path)
+        lineage_scans = self._read_jsonl(self.lineage_scans_path)
+        last_review_at = str(reviews[-1].get("generated_at") or "") if reviews else ""
+        if not last_review_at and lineage_scans:
+            last_review_at = str(lineage_scans[-1].get("generated_at") or "")
+        learnings = self._learning_records()
+        new_learnings = [item for item in learnings if not last_review_at or item.created_at > last_review_at]
+        new_runs = [item for item in runs if not last_review_at or item.created_at > last_review_at]
+        attributed = [item for item in runs if item.guidance_learning_ids]
+        worked = [item for item in attributed if item.outcome == Outcome.WORKED]
+        regressed = [item for item in attributed if item.outcome in {Outcome.FAILED, Outcome.PARTIAL}]
+        avoided = [pitfall for item in runs for pitfall in item.pitfalls_avoided]
+        avoided_normalized = {item.strip().lower(): item for item in avoided if item.strip()}
+        recurring = sorted(
+            {
+                avoided_normalized[run.failure_mode.strip().lower()]
+                for run in runs
+                if run.failure_mode.strip().lower() in avoided_normalized
+            }
+        )
+        completed_attributed = len(worked) + len(regressed)
+        effectiveness = None if completed_attributed == 0 else round(len(worked) / completed_attributed, 3)
+        activity = len(new_learnings) + len(new_runs)
+        if regressed and len(regressed) >= len(worked):
+            mode, minutes, threshold, max_age = "hybrid", 15, 3, 6
+        elif activity >= 20:
+            mode, minutes, threshold, max_age = "record_based", 15, 10, 6
+        elif activity >= 8:
+            mode, minutes, threshold, max_age = "record_based", 30, 8, 12
+        elif activity >= 3:
+            mode, minutes, threshold, max_age = "hybrid", 60, 5, 24
+        else:
+            mode, minutes, threshold, max_age = "time_based", 360, 3, 24
+        review = EffectivenessReview(
+            runs_reviewed=len(runs),
+            attributed_runs=len(attributed),
+            guidance_worked=len(worked),
+            guidance_regressed=len(regressed),
+            pitfalls_avoided=len(avoided),
+            recurring_pitfalls=recurring,
+            unattributed_runs=len(runs) - len(attributed),
+            effectiveness=effectiveness,
+            schedule_mode=mode,
+            recommended_check_minutes=minutes,
+            recommended_new_learning_threshold=threshold,
+            recommended_max_age_hours=max_age,
+            new_learnings_since_review=len(new_learnings),
+            new_runs_since_review=len(new_runs),
+        )
+        self._append_jsonl(self.effectiveness_reviews_path, review.model_dump(mode="json"))
+        return review
 
     def list_recent_learnings(self, limit: int = 10, skill_name: str | None = None) -> list[SkillLearning]:
         records = [SkillLearning.model_validate(item) for item in self._read_jsonl(self.learnings_path)]
