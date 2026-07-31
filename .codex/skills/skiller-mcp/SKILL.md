@@ -27,6 +27,8 @@ When Skiller results affect the final answer, include brief evidence such as:
 
 - Preflight hooks that enforce Skiller must call Skiller immediately, such as `recommend_skills` or `refresh_skill_catalog`, not only emit guidance for the model to use Skiller later.
 - Use `capture_work_product` after new, different, failed, or guardrail-producing work.
+- When a learning corrects or completes a prior failed/partial learning, pass `corrects_learning_ids` and the current `thread_id` to `capture_work_product`, or use `link_learning_correction` for an existing record.
+- Use `get_learning_lineage` before proposing a process update from a known learning id so child corrections and follow-on guardrails are applied with the root workflow.
 - Use `record_skill_run` when a named skill was used and the outcome is known.
 - Use `recommend_skills` before work where prior local skill history may affect tool choice.
 - Use `refresh_skill_catalog` to index installed or project-local `SKILL.md` files before relying on recommendations.
@@ -51,6 +53,12 @@ When Skiller results affect the final answer, include brief evidence such as:
 - When detector rules change, migrate or prune stale state entries at hook startup so old false positives do not keep firing after the code is fixed.
 - For diagnostics owned by another enforcement hook such as `calculator_mcp_guard`, record the first occurrence quietly. If the same owned diagnostic repeats, surface a targeted troubleshoot-or-ignore prompt instead of silently swallowing it.
 - Do not spam advisory messages for one-off warnings or errors.
+
+## Learning Lineage Guardrails
+
+- Corrections must link back to the earliest known failed or partial learning, not only the most recent follow-up record.
+- When repairing old records, backfill the root or original learning so future recommendations can surface the correction chain.
+- If a thread id is known, attach it to both the correction and the corrected learning through Skiller lineage metadata.
 
 ## Fallback
 

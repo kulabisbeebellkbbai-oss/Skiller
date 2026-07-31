@@ -60,6 +60,10 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
         guardrails: list[str] | None = None,
         tags: list[str] | None = None,
         reliability_impact: str = "",
+        thread_id: str = "",
+        root_learning_id: str = "",
+        parent_learning_ids: list[str] | None = None,
+        corrects_learning_ids: list[str] | None = None,
         create_drafts: bool = True,
         user_approved_update: bool = False,
     ) -> CaptureResult:
@@ -77,12 +81,36 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
             guardrails=guardrails or [],
             tags=tags or [],
             reliability_impact=reliability_impact,
+            thread_ids=[thread_id] if thread_id else [],
+            root_learning_id=root_learning_id,
+            parent_learning_ids=parent_learning_ids or [],
+            corrects_learning_ids=corrects_learning_ids or [],
         )
         return store.capture_work_product(
             learning,
             create_drafts=create_drafts,
             user_approved_update=user_approved_update,
         )
+
+    @mcp.tool()
+    def link_learning_correction(
+        correction_learning_id: str,
+        corrects_learning_ids: list[str],
+        thread_id: str = "",
+        root_learning_id: str = "",
+    ) -> list[SkillLearning]:
+        """Link an existing correction learning to the earlier learning records it corrects."""
+        return store.link_learning_correction(
+            correction_learning_id=correction_learning_id,
+            corrects_learning_ids=corrects_learning_ids,
+            thread_id=thread_id,
+            root_learning_id=root_learning_id,
+        )
+
+    @mcp.tool()
+    def get_learning_lineage(learning_id: str) -> dict:
+        """Return a captured learning with its root, parents, children, and corrections."""
+        return store.get_learning_lineage(learning_id)
 
     @mcp.tool()
     def record_skill_run(

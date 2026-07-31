@@ -37,6 +37,12 @@ class SkillLearning(BaseModel):
     guardrails: list[str] = Field(default_factory=list, max_length=50)
     tags: list[str] = Field(default_factory=list, max_length=40)
     reliability_impact: str = Field(default="", max_length=2000)
+    thread_ids: list[str] = Field(default_factory=list, max_length=20)
+    root_learning_id: str = Field(default="", max_length=80)
+    parent_learning_ids: list[str] = Field(default_factory=list, max_length=20)
+    corrects_learning_ids: list[str] = Field(default_factory=list, max_length=20)
+    child_learning_ids: list[str] = Field(default_factory=list, max_length=100)
+    correction_learning_ids: list[str] = Field(default_factory=list, max_length=100)
 
     @field_validator("skill_name")
     @classmethod
@@ -46,10 +52,26 @@ class SkillLearning(BaseModel):
         normalized = value.strip().lower().replace(" ", "-")
         return normalized or None
 
-    @field_validator("evidence", "files_changed", "reusable_steps", "guardrails", "tags")
+    @field_validator(
+        "evidence",
+        "files_changed",
+        "reusable_steps",
+        "guardrails",
+        "tags",
+        "thread_ids",
+        "parent_learning_ids",
+        "corrects_learning_ids",
+        "child_learning_ids",
+        "correction_learning_ids",
+    )
     @classmethod
     def strip_lists(cls, value: list[str]) -> list[str]:
-        return [item.strip() for item in value if item and item.strip()]
+        return list(dict.fromkeys(item.strip() for item in value if item and item.strip()))
+
+    @field_validator("root_learning_id")
+    @classmethod
+    def strip_root_learning_id(cls, value: str) -> str:
+        return value.strip()
 
 
 class SkillRun(BaseModel):

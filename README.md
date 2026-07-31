@@ -34,6 +34,8 @@ With the server running, validate the MCP transport:
 ## Tools
 
 - `capture_work_product`: record reusable new, variant, guardrail, or failure learnings.
+- `link_learning_correction`: connect an existing correction learning to earlier records it corrects.
+- `get_learning_lineage`: inspect a learning's root, parent, child, and correction records.
 - `record_skill_run`: append reliability evidence for a skill invocation.
 - `recommend_skills`: rank captured or indexed skills for a task.
 - `propose_skill_update`: summarize failures and variants that should become guardrails.
@@ -64,3 +66,7 @@ The installer copies `scripts/skiller_mcp_guard.py` into `~/.codex/hooks/`, inst
 The Skiller preflight hook calls Skiller immediately with `recommend_skills`; the Stop hook is only a backstop for missing evidence and repeated warning/error patterns.
 
 Skiller writes only under its configured data directory. By default that is `./data` in the current working directory. Draft skills and memory notes are stored under `data/drafts/` for review before installing them into a global Codex scope. Skill update policies are stored in `data/skill_policies.jsonl`; protected skills require `user_approved_update=true` before Skiller drafts updates for them.
+
+## Learning Lineage
+
+When a later learning corrects an earlier failed or partial process, pass `corrects_learning_ids` and, when known, `thread_id` to `capture_work_product`. Skiller backfills the corrected record with `child_learning_ids`, `correction_learning_ids`, and `thread_ids` so future recommendations and profiles can pull the follow-on guardrails into the root workflow. Use `link_learning_correction` to repair older records that were captured before the lineage was known.

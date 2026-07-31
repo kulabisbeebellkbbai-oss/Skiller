@@ -111,6 +111,91 @@ def test_propose_skill_update_surfaces_failed_guardrails(tmp_path: Path) -> None
     assert "Avoid first-run failures on empty checkouts." in profile.suggested_guardrails
 
 
+def test_capture_correction_backfills_original_learning_lineage(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    original = store.capture_work_product(
+        SkillLearning(
+            title="Project MCP config was scoped too narrowly",
+            summary="A local project MCP config did not affect managed runner tool catalogs.",
+            novelty=Novelty.FAILURE,
+            outcome=Outcome.PARTIAL,
+            skill_name="codex-scope-manager",
+            guardrails=["Do not use local CLI smoke as managed-runner proof."],
+        ),
+        create_drafts=False,
+    ).learning
+    correction = store.capture_work_product(
+        SkillLearning(
+            title="Managed runner profile carries Playwright",
+            summary="Inject the required Playwright MCP into the managed runner capability profile.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="codex-scope-manager",
+            corrects_learning_ids=[original.id],
+            thread_ids=["thread-1"],
+            guardrails=["Verify from a managed turn before closing the task."],
+        ),
+        create_drafts=False,
+    ).learning
+
+    updated_original = store.get_learning(original.id)
+    lineage = store.get_learning_lineage(original.id)
+    correction_lineage = store.get_learning_lineage(correction.id)
+    profile = store.propose_skill_update("codex-scope-manager")
+
+    assert updated_original is not None
+    assert updated_original.correction_learning_ids == [correction.id]
+    assert updated_original.child_learning_ids == [correction.id]
+    assert updated_original.thread_ids == ["thread-1"]
+    assert correction.root_learning_id == original.id
+    assert correction.parent_learning_ids == [original.id]
+    assert lineage["corrections"] == [correction]
+    assert correction_lineage["root"] == updated_original
+    assert "Verify from a managed turn before closing the task." in profile.suggested_guardrails
+
+
+def test_link_learning_correction_repairs_existing_records(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    original = store.capture_work_product(
+        SkillLearning(
+            title="Original workflow failed",
+            summary="The first process captured an incomplete implementation path.",
+            novelty=Novelty.FAILURE,
+            outcome=Outcome.FAILED,
+            skill_name="skiller-mcp",
+        ),
+        create_drafts=False,
+    ).learning
+    correction = store.capture_work_product(
+        SkillLearning(
+            title="Follow-on correction worked",
+            summary="The second process fixed the missing step.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="skiller-mcp",
+        ),
+        create_drafts=False,
+    ).learning
+
+    linked = store.link_learning_correction(
+        correction.id,
+        [original.id],
+        thread_id="thread-2",
+        root_learning_id=original.id,
+    )
+    updated_original = store.get_learning(original.id)
+    updated_correction = store.get_learning(correction.id)
+
+    assert [item.id for item in linked] == [correction.id, original.id]
+    assert updated_original is not None
+    assert updated_correction is not None
+    assert updated_original.correction_learning_ids == [correction.id]
+    assert updated_original.thread_ids == ["thread-2"]
+    assert updated_correction.corrects_learning_ids == [original.id]
+    assert updated_correction.root_learning_id == original.id
+    assert updated_correction.thread_ids == ["thread-2"]
+
+
 def test_non_updatable_skill_blocks_draft_without_user_approval(tmp_path: Path) -> None:
     store = SkillerStore(tmp_path)
     policy = store.set_skill_policy("critical-skill", updatable=False, reason="Requires maintainer review.")

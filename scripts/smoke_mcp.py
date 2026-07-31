@@ -28,6 +28,8 @@ async def run_smoke(endpoint: str, health_url: str) -> None:
                 "list_skill_catalog",
                 "set_skill_update_policy",
                 "list_skill_update_policies",
+                "link_learning_correction",
+                "get_learning_lineage",
             }
             missing = required - names
             if missing:

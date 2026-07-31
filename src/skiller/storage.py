@@ -48,7 +48,9 @@ class SkillerStore:
         user_approved_update: bool = False,
     ) -> CaptureResult:
         self.initialize()
+        learning = self._resolve_learning_lineage(learning)
         self._append_jsonl(self.learnings_path, learning.model_dump(mode="json"))
+        self._backfill_learning_lineage(learning)
         artifacts: list[DraftArtifact] = []
         policy = self.get_skill_policy(learning.skill_name) if learning.skill_name else None
         if create_drafts and policy and not policy.updatable and not user_approved_update:
@@ -82,6 +84,89 @@ class SkillerStore:
             normalized = self._normalize_skill(skill_name)
             records = [record for record in records if record.skill_name == normalized]
         return sorted(records, key=lambda item: item.created_at, reverse=True)[: max(1, min(limit, 50))]
+
+    def get_learning(self, learning_id: str) -> SkillLearning | None:
+        normalized = learning_id.strip()
+        for record in self._learning_records():
+            if record.id == normalized:
+                return record
+        return None
+
+    def link_learning_correction(
+        self,
+        correction_learning_id: str,
+        corrects_learning_ids: list[str],
+        thread_id: str = "",
+        root_learning_id: str = "",
+    ) -> list[SkillLearning]:
+        self.initialize()
+        correction_id = correction_learning_id.strip()
+        target_ids = list(dict.fromkeys(item.strip() for item in corrects_learning_ids if item and item.strip()))
+        if not target_ids:
+            raise ValueError("At least one corrected learning id is required.")
+        records = self._learning_records()
+        by_id = {record.id: record for record in records}
+        if correction_id not in by_id:
+            raise ValueError(f"Unknown correction learning id: {correction_id}")
+        missing = [learning_id for learning_id in target_ids if learning_id not in by_id]
+        if missing:
+            raise ValueError(f"Unknown corrected learning id(s): {', '.join(missing)}")
+        root_id = root_learning_id.strip()
+        if root_id and root_id not in by_id:
+            raise ValueError(f"Unknown root learning id: {root_id}")
+
+        correction = by_id[correction_id]
+        correction.corrects_learning_ids = self._merge_ids(correction.corrects_learning_ids, target_ids)
+        if not correction.parent_learning_ids:
+            correction.parent_learning_ids = target_ids
+        if root_id:
+            correction.root_learning_id = root_id
+        elif not correction.root_learning_id:
+            first_target = by_id[target_ids[0]]
+            correction.root_learning_id = first_target.root_learning_id or first_target.id
+        if thread_id.strip():
+            correction.thread_ids = self._merge_ids(correction.thread_ids, [thread_id.strip()])
+
+        for target_id in target_ids:
+            target = by_id[target_id]
+            target.correction_learning_ids = self._merge_ids(target.correction_learning_ids, [correction.id])
+            target.child_learning_ids = self._merge_ids(target.child_learning_ids, [correction.id])
+            if thread_id.strip():
+                target.thread_ids = self._merge_ids(target.thread_ids, [thread_id.strip()])
+            target_root_id = target.root_learning_id or target.id
+            if target_root_id in by_id and target_root_id != target.id:
+                root = by_id[target_root_id]
+                root.child_learning_ids = self._merge_ids(root.child_learning_ids, [correction.id])
+                root.correction_learning_ids = self._merge_ids(root.correction_learning_ids, [correction.id])
+                if thread_id.strip():
+                    root.thread_ids = self._merge_ids(root.thread_ids, [thread_id.strip()])
+
+        self._write_learning_records(records)
+        linked_ids = [correction_id] + target_ids
+        if correction.root_learning_id:
+            linked_ids.append(correction.root_learning_id)
+        return [by_id[learning_id] for learning_id in dict.fromkeys(linked_ids) if learning_id in by_id]
+
+    def get_learning_lineage(self, learning_id: str) -> dict[str, SkillLearning | list[SkillLearning] | None]:
+        learning = self.get_learning(learning_id)
+        if learning is None:
+            raise ValueError(f"Unknown learning id: {learning_id}")
+        by_id = {record.id: record for record in self._learning_records()}
+        root = by_id.get(learning.root_learning_id) if learning.root_learning_id else learning
+        parents = [by_id[item] for item in learning.parent_learning_ids if item in by_id]
+        corrections = [by_id[item] for item in learning.correction_learning_ids if item in by_id]
+        children = [by_id[item] for item in learning.child_learning_ids if item in by_id]
+        if not corrections:
+            corrections = [record for record in by_id.values() if learning.id in record.corrects_learning_ids]
+        if not children:
+            children = [record for record in by_id.values() if learning.id in record.parent_learning_ids]
+        return {
+            "learning": learning,
+            "root": root,
+            "parents": parents,
+            "corrections": sorted(corrections, key=lambda item: item.created_at),
+            "children": sorted(children, key=lambda item: item.created_at),
+        }
 
     def recommend_skills(self, task_description: str, limit: int = 5) -> list[SkillRecommendation]:
         task_terms = self._terms(task_description)
@@ -147,7 +232,7 @@ class SkillerStore:
                 suggested_guardrails=[],
                 draft_paths=self._draft_paths(normalized),
             )
-        learnings = self.list_recent_learnings(limit=50, skill_name=normalized)
+        learnings = self._with_linked_learnings(self.list_recent_learnings(limit=50, skill_name=normalized))
         guardrails = []
         for learning in learnings:
             if learning.outcome in {Outcome.FAILED, Outcome.PARTIAL} or learning.novelty.value in {"failure", "guardrail"}:
@@ -186,6 +271,82 @@ class SkillerStore:
 
     def get_skill_profile(self, skill_name: str) -> SkillProfile:
         return self.propose_skill_update(skill_name)
+
+    def _learning_records(self) -> list[SkillLearning]:
+        return [SkillLearning.model_validate(item) for item in self._read_jsonl(self.learnings_path)]
+
+    def _write_learning_records(self, records: list[SkillLearning]) -> None:
+        self._write_jsonl(self.learnings_path, [record.model_dump(mode="json") for record in records])
+
+    def _resolve_learning_lineage(self, learning: SkillLearning) -> SkillLearning:
+        by_id = {record.id: record for record in self._learning_records()}
+        related_ids = learning.corrects_learning_ids or learning.parent_learning_ids
+        if related_ids and not learning.root_learning_id:
+            first_related = by_id.get(related_ids[0])
+            if first_related is not None:
+                learning.root_learning_id = first_related.root_learning_id or first_related.id
+        if learning.corrects_learning_ids and not learning.parent_learning_ids:
+            learning.parent_learning_ids = list(learning.corrects_learning_ids)
+        return learning
+
+    def _backfill_learning_lineage(self, learning: SkillLearning) -> None:
+        related_ids = self._merge_ids(learning.parent_learning_ids, learning.corrects_learning_ids)
+        if not related_ids and not learning.root_learning_id:
+            return
+        records = self._learning_records()
+        by_id = {record.id: record for record in records}
+        changed = False
+        for related_id in related_ids:
+            target = by_id.get(related_id)
+            if target is None:
+                continue
+            before = target.model_dump(mode="json")
+            target.child_learning_ids = self._merge_ids(target.child_learning_ids, [learning.id])
+            if related_id in learning.corrects_learning_ids:
+                target.correction_learning_ids = self._merge_ids(target.correction_learning_ids, [learning.id])
+            target.thread_ids = self._merge_ids(target.thread_ids, learning.thread_ids)
+            changed = changed or target.model_dump(mode="json") != before
+            root_id = target.root_learning_id or target.id
+            root = by_id.get(root_id)
+            if root is not None and root.id != target.id:
+                before_root = root.model_dump(mode="json")
+                root.child_learning_ids = self._merge_ids(root.child_learning_ids, [learning.id])
+                if related_id in learning.corrects_learning_ids:
+                    root.correction_learning_ids = self._merge_ids(root.correction_learning_ids, [learning.id])
+                root.thread_ids = self._merge_ids(root.thread_ids, learning.thread_ids)
+                changed = changed or root.model_dump(mode="json") != before_root
+        if learning.root_learning_id and learning.root_learning_id in by_id:
+            root = by_id[learning.root_learning_id]
+            before_root = root.model_dump(mode="json")
+            root.child_learning_ids = self._merge_ids(root.child_learning_ids, [learning.id])
+            root.thread_ids = self._merge_ids(root.thread_ids, learning.thread_ids)
+            changed = changed or root.model_dump(mode="json") != before_root
+        if changed:
+            self._write_learning_records(records)
+
+    def _with_linked_learnings(self, learnings: list[SkillLearning]) -> list[SkillLearning]:
+        by_id = {record.id: record for record in self._learning_records()}
+        selected: dict[str, SkillLearning] = {learning.id: learning for learning in learnings}
+        to_visit = list(selected.values())
+        while to_visit:
+            learning = to_visit.pop()
+            linked_ids = (
+                learning.parent_learning_ids
+                + learning.corrects_learning_ids
+                + learning.child_learning_ids
+                + learning.correction_learning_ids
+                + ([learning.root_learning_id] if learning.root_learning_id else [])
+            )
+            for linked_id in linked_ids:
+                linked = by_id.get(linked_id)
+                if linked is not None and linked.id not in selected and linked.skill_name == learning.skill_name:
+                    selected[linked.id] = linked
+                    to_visit.append(linked)
+        return sorted(selected.values(), key=lambda item: item.created_at, reverse=True)
+
+    @staticmethod
+    def _merge_ids(existing: list[str], additions: list[str]) -> list[str]:
+        return list(dict.fromkeys([item.strip() for item in existing + additions if item and item.strip()]))
 
     def set_skill_policy(self, skill_name: str, updatable: bool, reason: str = "") -> SkillPolicy:
         self.initialize()
