@@ -14,6 +14,10 @@ from .models import (
     CaptureResult,
     DraftArtifact,
     EffectivenessReview,
+    GuidanceAdherenceFinding,
+    GuidanceBundle,
+    GuidanceRecommendationEvent,
+    GuidanceViolation,
     LineageLinkCandidate,
     LineageScanResult,
     MemoryLinkCandidate,
@@ -47,6 +51,8 @@ class SkillerStore:
         self.memory_links_path = data_dir / "memory_links.jsonl"
         self.overseer_guidance_path = data_dir / "overseer_guidance.jsonl"
         self.memory_scan_config_path = data_dir / "memory_scan_config.json"
+        self.recommendation_events_path = data_dir / "recommendation_events.jsonl"
+        self.guidance_findings_path = data_dir / "guidance_findings.jsonl"
         self.drafts_dir = data_dir / "drafts"
 
     def initialize(self) -> None:
@@ -61,6 +67,8 @@ class SkillerStore:
         self.memory_scans_path.touch(exist_ok=True)
         self.memory_links_path.touch(exist_ok=True)
         self.overseer_guidance_path.touch(exist_ok=True)
+        self.recommendation_events_path.touch(exist_ok=True)
+        self.guidance_findings_path.touch(exist_ok=True)
 
     def capture_work_product(
         self,
@@ -505,7 +513,14 @@ class SkillerStore:
             "age_hours": round(age_hours, 3),
         }
 
-    def recommend_skills(self, task_description: str, limit: int = 5) -> list[SkillRecommendation]:
+    def recommend_skills(
+        self,
+        task_description: str,
+        limit: int = 5,
+        thread_id: str = "",
+        turn_id: str = "",
+        record_event: bool = True,
+    ) -> list[SkillRecommendation]:
         task_terms = self._terms(task_description)
         if not task_terms:
             return []
@@ -555,7 +570,127 @@ class SkillerStore:
                 )
             )
 
-        return sorted(recommendations, key=lambda item: item.score, reverse=True)[: max(1, min(limit, 10))]
+        ranked = sorted(recommendations, key=lambda item: item.score, reverse=True)[: max(1, min(limit, 10))]
+        if record_event:
+            self._record_recommendation_event(task_description, ranked, thread_id=thread_id, turn_id=turn_id)
+        return ranked
+
+    def get_thread_guidance_context(
+        self,
+        thread_id: str = "",
+        recommendation_event_id: str = "",
+        task_description: str = "",
+        limit: int = 5,
+    ) -> GuidanceBundle:
+        self.initialize()
+        event = self._select_guidance_event(
+            thread_id=thread_id,
+            recommendation_event_id=recommendation_event_id,
+            task_description=task_description,
+            limit=limit,
+        )
+        learnings_by_id = {learning.id: learning for learning in self._learning_records()}
+        learnings = [learnings_by_id[item] for item in event.guidance_learning_ids if item in learnings_by_id]
+        memory_context = []
+        for learning in learnings:
+            context = self.get_learning_memory_context(learning.id)
+            for memory in context.get("memories", []):
+                if isinstance(memory, dict):
+                    memory_context.append(memory)
+        deduped_memory = {str(item.get("id", "")): item for item in memory_context if item.get("id")}
+        return GuidanceBundle(event=event, learnings=learnings, memory_context=list(deduped_memory.values()))
+
+    def evaluate_guidance_adherence(
+        self,
+        action_summary: str,
+        thread_id: str = "",
+        recommendation_event_id: str = "",
+        task_description: str = "",
+        used_skill_names: list[str] | None = None,
+        used_learning_ids: list[str] | None = None,
+        checks_performed: list[str] | None = None,
+        outcome: str = "unknown",
+        record: bool = True,
+    ) -> GuidanceAdherenceFinding:
+        bundle = self.get_thread_guidance_context(
+            thread_id=thread_id,
+            recommendation_event_id=recommendation_event_id,
+            task_description=task_description or action_summary,
+        )
+        event = bundle.event
+        used_skills = {self._normalize_skill(item) for item in (used_skill_names or []) if item}
+        used_ids = set(used_learning_ids or [])
+        action_terms = self._terms(" ".join([action_summary, " ".join(checks_performed or [])]))
+        recommended_skills = {item.skill_name for item in event.recommendations}
+        matched_skill_names = sorted(skill for skill in recommended_skills if skill in used_skills or skill in action_terms)
+        missing_skill_names = sorted(recommended_skills - set(matched_skill_names))
+
+        learnings_by_id = {learning.id: learning for learning in bundle.learnings}
+        matched_learning_ids: list[str] = []
+        ignored_learning_ids: list[str] = []
+        violations: list[GuidanceViolation] = []
+        known_failure_paths: list[str] = []
+
+        for learning in bundle.learnings:
+            learning_terms = self._learning_terms(learning)
+            relevant = bool(learning.id in used_ids or (learning.skill_name and learning.skill_name in used_skills))
+            related_action = bool(relevant or action_terms & learning_terms)
+            if related_action:
+                matched_learning_ids.append(learning.id)
+            else:
+                ignored_learning_ids.append(learning.id)
+            if learning.outcome in {Outcome.FAILED, Outcome.PARTIAL} or learning.novelty in {Novelty.FAILURE, Novelty.GUARDRAIL}:
+                if learning.reliability_impact:
+                    known_failure_paths.append(learning.reliability_impact)
+                for guardrail in learning.guardrails:
+                    if not related_action:
+                        continue
+                    violation = self._guardrail_violation(guardrail, action_summary, checks_performed or [])
+                    if violation:
+                        violations.append(
+                            GuidanceViolation(
+                                learning_id=learning.id,
+                                skill_name=learning.skill_name or "",
+                                severity="high" if learning.outcome in {Outcome.FAILED, Outcome.PARTIAL} else "warning",
+                                guardrail=guardrail,
+                                evidence=violation,
+                            )
+                        )
+
+        normalized_outcome = outcome.strip().lower()
+        if violations:
+            status = "violated"
+            confidence = 0.85
+        elif matched_skill_names or matched_learning_ids:
+            status = "followed"
+            confidence = 0.75
+        elif recommended_skills or event.guidance_learning_ids:
+            status = "ignored"
+            confidence = 0.65
+        else:
+            status = "unknown"
+            confidence = 0.25
+        if normalized_outcome in {"failed", "partial"} and status == "followed":
+            status = "unknown"
+            confidence = 0.5
+
+        finding = GuidanceAdherenceFinding(
+            thread_id=thread_id or event.thread_id,
+            recommendation_event_id=event.id,
+            status=status,
+            confidence=confidence,
+            action_summary=action_summary,
+            matched_skill_names=matched_skill_names,
+            missing_skill_names=missing_skill_names,
+            matched_guidance_learning_ids=list(dict.fromkeys(matched_learning_ids)),
+            ignored_guidance_learning_ids=[item for item in dict.fromkeys(ignored_learning_ids) if item not in matched_learning_ids],
+            violations=violations,
+            known_failure_paths=list(dict.fromkeys(known_failure_paths + event.known_failure_paths)),
+            notes="Skiller guidance adherence finding for Overseer or thread review.",
+        )
+        if record:
+            self._append_jsonl(self.guidance_findings_path, finding.model_dump(mode="json"))
+        return finding
 
     def propose_skill_update(self, skill_name: str, user_approved_update: bool = False) -> SkillProfile:
         normalized = self._normalize_skill(skill_name)
@@ -609,6 +744,86 @@ class SkillerStore:
 
     def get_skill_profile(self, skill_name: str) -> SkillProfile:
         return self.propose_skill_update(skill_name)
+
+    def _record_recommendation_event(
+        self,
+        task_description: str,
+        recommendations: list[SkillRecommendation],
+        thread_id: str = "",
+        turn_id: str = "",
+    ) -> GuidanceRecommendationEvent:
+        guidance_learnings: dict[str, SkillLearning] = {}
+        guardrails: list[str] = []
+        known_failure_paths: list[str] = []
+        memory_record_ids: list[str] = []
+        for recommendation in recommendations:
+            learnings = self._with_linked_learnings(self.list_recent_learnings(limit=50, skill_name=recommendation.skill_name))
+            for learning in learnings:
+                guidance_learnings[learning.id] = learning
+                memory_record_ids.extend(learning.memory_record_ids)
+                if learning.outcome in {Outcome.FAILED, Outcome.PARTIAL} or learning.novelty in {Novelty.FAILURE, Novelty.GUARDRAIL}:
+                    guardrails.extend(learning.guardrails)
+                    if learning.reliability_impact:
+                        known_failure_paths.append(learning.reliability_impact)
+        event = GuidanceRecommendationEvent(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            task_description=task_description,
+            recommendations=recommendations,
+            guidance_learning_ids=list(guidance_learnings),
+            guardrails=guardrails,
+            known_failure_paths=known_failure_paths,
+            memory_record_ids=memory_record_ids,
+        )
+        self._append_jsonl(self.recommendation_events_path, event.model_dump(mode="json"))
+        return event
+
+    def _recommendation_events(self) -> list[GuidanceRecommendationEvent]:
+        return [GuidanceRecommendationEvent.model_validate(item) for item in self._read_jsonl(self.recommendation_events_path)]
+
+    def _select_guidance_event(
+        self,
+        thread_id: str = "",
+        recommendation_event_id: str = "",
+        task_description: str = "",
+        limit: int = 5,
+    ) -> GuidanceRecommendationEvent:
+        events = self._recommendation_events()
+        event_id = recommendation_event_id.strip()
+        if event_id:
+            for event in events:
+                if event.id == event_id:
+                    return event
+            raise ValueError(f"Unknown recommendation event id: {event_id}")
+        thread = thread_id.strip()
+        if thread:
+            for event in reversed(events):
+                if event.thread_id == thread:
+                    return event
+        if task_description.strip():
+            recommendations = self.recommend_skills(task_description, limit=limit, thread_id=thread, record_event=False)
+            return self._record_recommendation_event(task_description, recommendations, thread_id=thread)
+        raise ValueError("A thread_id, recommendation_event_id, or task_description is required.")
+
+    def _guardrail_violation(self, guardrail: str, action_summary: str, checks_performed: list[str]) -> str:
+        guardrail_text = guardrail.lower()
+        action_text = " ".join([action_summary] + checks_performed).lower()
+        if not guardrail_text.strip():
+            return ""
+        if "do not" in guardrail_text or "never" in guardrail_text:
+            prohibited = re.sub(r"^.*?\b(?:do not|never)\b", "", guardrail_text).strip(" .:")
+            prohibited_terms = self._terms(prohibited)
+            if prohibited_terms and len(prohibited_terms & self._terms(action_text)) >= min(3, len(prohibited_terms)):
+                return "action appears to include prohibited guardrail terms"
+        if "before" in guardrail_text or "must" in guardrail_text or "verify" in guardrail_text:
+            required_terms = self._terms(guardrail_text)
+            action_terms = self._terms(action_text)
+            verification_terms = {"verify", "verified", "check", "checked", "test", "tested", "confirm", "confirmed", "review", "reviewed"}
+            if required_terms & verification_terms and not (action_terms & verification_terms):
+                return "action lacks verification language required by guardrail"
+        if "approval" in guardrail_text and "approval" not in action_text and "approved" not in action_text:
+            return "action lacks approval evidence required by guardrail"
+        return ""
 
     def _learning_records(self) -> list[SkillLearning]:
         return [SkillLearning.model_validate(item) for item in self._read_jsonl(self.learnings_path)]

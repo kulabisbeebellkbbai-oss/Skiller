@@ -199,6 +199,60 @@ class SkillProfile(BaseModel):
     draft_paths: list[str]
 
 
+class GuidanceRecommendationEvent(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    thread_id: str = Field(default="", max_length=120)
+    turn_id: str = Field(default="", max_length=120)
+    task_description: str = Field(min_length=3, max_length=4000)
+    recommendations: list[SkillRecommendation] = Field(default_factory=list, max_length=10)
+    guidance_learning_ids: list[str] = Field(default_factory=list, max_length=200)
+    guardrails: list[str] = Field(default_factory=list, max_length=200)
+    known_failure_paths: list[str] = Field(default_factory=list, max_length=100)
+    memory_record_ids: list[str] = Field(default_factory=list, max_length=200)
+
+    @field_validator(
+        "guidance_learning_ids",
+        "guardrails",
+        "known_failure_paths",
+        "memory_record_ids",
+    )
+    @classmethod
+    def strip_event_lists(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item and item.strip()))
+
+
+class GuidanceBundle(BaseModel):
+    event: GuidanceRecommendationEvent
+    learnings: list[SkillLearning] = Field(default_factory=list, max_length=200)
+    memory_context: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+
+
+class GuidanceViolation(BaseModel):
+    learning_id: str = ""
+    skill_name: str = ""
+    severity: Literal["info", "warning", "high"] = "warning"
+    guardrail: str
+    evidence: str = ""
+
+
+class GuidanceAdherenceFinding(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    thread_id: str = Field(default="", max_length=120)
+    recommendation_event_id: str = Field(default="", max_length=80)
+    status: Literal["followed", "ignored", "violated", "unknown"]
+    confidence: float
+    action_summary: str = Field(default="", max_length=4000)
+    matched_skill_names: list[str] = Field(default_factory=list, max_length=50)
+    missing_skill_names: list[str] = Field(default_factory=list, max_length=50)
+    matched_guidance_learning_ids: list[str] = Field(default_factory=list, max_length=100)
+    ignored_guidance_learning_ids: list[str] = Field(default_factory=list, max_length=100)
+    violations: list[GuidanceViolation] = Field(default_factory=list, max_length=100)
+    known_failure_paths: list[str] = Field(default_factory=list, max_length=100)
+    notes: str = Field(default="", max_length=2000)
+
+
 class LineageLinkCandidate(BaseModel):
     parent_learning_id: str
     child_learning_id: str

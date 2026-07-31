@@ -104,3 +104,37 @@ Overseer can send expansion guidance through `record_overseer_guidance`.
 `apply_overseer_guidance` only applies bounded configuration actions when the
 guidance record has `security_review_status=passed`; pending or failed reviews
 remain recorded but unapplied.
+
+## Guidance Adherence
+
+At the point where Skiller guidance is presented to a thread, create a durable
+recommendation event:
+
+```json
+{
+  "tool": "record_guidance_recommendation",
+  "arguments": {
+    "thread_id": "codex-thread-id",
+    "task_description": "Change Codex hooks safely"
+  }
+}
+```
+
+When the thread acts, evaluate the action against that guidance:
+
+```json
+{
+  "tool": "evaluate_guidance_adherence",
+  "arguments": {
+    "thread_id": "codex-thread-id",
+    "action_summary": "Used codex-scope-manager, verified approval, and ran /hooks.",
+    "used_skill_names": ["codex-scope-manager"],
+    "checks_performed": ["approval verified", "/hooks reviewed"],
+    "outcome": "worked"
+  }
+}
+```
+
+The finding status is one of `followed`, `ignored`, `violated`, or `unknown`.
+Skiller records the evidence and known failure paths; Overseer remains
+responsible for surfacing, escalating, or enforcing the finding.

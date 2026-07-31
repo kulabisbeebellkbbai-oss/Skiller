@@ -63,6 +63,73 @@ def test_recommend_skills_uses_learning_terms_and_reliability(tmp_path: Path) ->
     assert recommendations[0].reliability.reliability == 1.0
 
 
+def test_recommend_skills_records_guidance_event_and_context(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    learning = store.capture_work_product(
+        SkillLearning(
+            title="Approval guard before hook edits",
+            summary="Hook updates require scope verification and user hook trust.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="codex-scope-manager",
+            guardrails=["Before changing hooks, verify the user-level destination and run /hooks."],
+            reliability_impact="Prevents durable hook edits in the wrong Codex scope.",
+            tags=["hooks", "scope"],
+        ),
+        create_drafts=False,
+    ).learning
+
+    recommendations = store.recommend_skills(
+        "Need to update Codex hooks in the right scope",
+        thread_id="thread-guidance",
+    )
+    bundle = store.get_thread_guidance_context(thread_id="thread-guidance")
+
+    assert recommendations
+    assert bundle.event.thread_id == "thread-guidance"
+    assert learning.id in bundle.event.guidance_learning_ids
+    assert "Before changing hooks, verify the user-level destination and run /hooks." in bundle.event.guardrails
+
+
+def test_evaluate_guidance_adherence_detects_followed_ignored_and_violated(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    learning = store.capture_work_product(
+        SkillLearning(
+            title="Hook approval workflow",
+            summary="Use codex-scope-manager and verify approval before changing hooks.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.PARTIAL,
+            skill_name="codex-scope-manager",
+            guardrails=["Before changing hooks, verify approval and run /hooks."],
+            reliability_impact="Skipping hook approval causes untrusted durable behavior.",
+            tags=["hooks", "approval"],
+        ),
+        create_drafts=False,
+    ).learning
+    store.recommend_skills("Change Codex hooks safely", thread_id="thread-audit")
+
+    followed = store.evaluate_guidance_adherence(
+        thread_id="thread-audit",
+        action_summary="Used codex-scope-manager, verified approval, and ran /hooks.",
+        used_skill_names=["codex-scope-manager"],
+        used_learning_ids=[learning.id],
+        checks_performed=["approval verified", "/hooks reviewed"],
+    )
+    ignored = store.evaluate_guidance_adherence(
+        thread_id="thread-audit",
+        action_summary="Implemented an unrelated display change.",
+    )
+    violated = store.evaluate_guidance_adherence(
+        thread_id="thread-audit",
+        action_summary="Changed hooks immediately without approval evidence.",
+    )
+
+    assert followed.status == "followed"
+    assert ignored.status == "ignored"
+    assert violated.status == "violated"
+    assert violated.violations
+
+
 def test_effectiveness_review_tracks_attributed_guidance_and_recurring_pitfalls(tmp_path: Path) -> None:
     store = SkillerStore(tmp_path)
     store.record_skill_run(

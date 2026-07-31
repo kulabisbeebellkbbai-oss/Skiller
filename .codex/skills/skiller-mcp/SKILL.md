@@ -37,6 +37,9 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Use `record_overseer_guidance` for Overseer-provided expansion requests, and `apply_overseer_guidance` only applies bounded configuration actions whose `security_review_status` is `passed`.
 - Use `record_skill_run` when a named skill was used and the outcome is known.
 - Use `recommend_skills` before work where prior local skill history may affect tool choice.
+- Use `record_guidance_recommendation` when a thread or Overseer needs a durable record of what Skiller recommended at decision time.
+- Use `get_thread_guidance_context` to fetch the recommendation event, linked learnings, guardrails, known failure paths, and memory context for a thread.
+- Use `evaluate_guidance_adherence` when comparing a thread's actions against the Skiller guidance it received; record findings for Overseer to consume.
 - Use `refresh_skill_catalog` to index installed or project-local `SKILL.md` files before relying on recommendations.
 - Use `list_skill_catalog` to inspect the indexed skill catalog.
 - Use `set_skill_update_policy` to mark skills that Skiller must not draft updates for without explicit user approval.
@@ -69,6 +72,7 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Before a thread repeats a process, inspect `get_learning_lineage` or a relevant skill profile so prior follow-on issues and environment-specific resources are visible.
 - AI-memory association must preserve provenance through `memory_record_ids` and avoid bulk-importing rollout logs, passphrases, secrets, or raw private memory dumps.
 - Overseer guidance may expand scanner behavior only through reviewed, bounded configuration actions; unreviewed or failed security reviews remain recorded but unapplied.
+- Guidance adherence is a Skiller finding, not an Overseer enforcement action. Skiller should produce recommendation events and `followed` / `ignored` / `violated` / `unknown` findings; Overseer decides what to do with them.
 
 ## Fallback
 

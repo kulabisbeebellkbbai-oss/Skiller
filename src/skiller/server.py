@@ -9,6 +9,8 @@ from starlette.responses import JSONResponse
 from .models import (
     CaptureResult,
     CatalogRefreshResult,
+    GuidanceAdherenceFinding,
+    GuidanceBundle,
     Outcome,
     SkillCatalogEntry,
     SkillLearning,
@@ -229,6 +231,69 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
     def recommend_skills(task_description: str, limit: int = 5) -> list[SkillRecommendation]:
         """Rank captured skills that appear relevant to a future task."""
         return store.recommend_skills(task_description, limit=limit)
+
+    @mcp.tool()
+    def record_guidance_recommendation(
+        task_description: str,
+        thread_id: str = "",
+        turn_id: str = "",
+        limit: int = 5,
+    ) -> GuidanceBundle:
+        """Record a durable guidance event and return linked learnings, guardrails, and memory context."""
+        recommendations = store.recommend_skills(
+            task_description,
+            limit=limit,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            record_event=False,
+        )
+        event = store._record_recommendation_event(
+            task_description,
+            recommendations,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        return store.get_thread_guidance_context(recommendation_event_id=event.id)
+
+    @mcp.tool()
+    def get_thread_guidance_context(
+        thread_id: str = "",
+        recommendation_event_id: str = "",
+        task_description: str = "",
+        limit: int = 5,
+    ) -> GuidanceBundle:
+        """Return the guidance package Skiller expects a thread to consider."""
+        return store.get_thread_guidance_context(
+            thread_id=thread_id,
+            recommendation_event_id=recommendation_event_id,
+            task_description=task_description,
+            limit=limit,
+        )
+
+    @mcp.tool()
+    def evaluate_guidance_adherence(
+        action_summary: str,
+        thread_id: str = "",
+        recommendation_event_id: str = "",
+        task_description: str = "",
+        used_skill_names: list[str] | None = None,
+        used_learning_ids: list[str] | None = None,
+        checks_performed: list[str] | None = None,
+        outcome: str = "unknown",
+        record: bool = True,
+    ) -> GuidanceAdherenceFinding:
+        """Evaluate whether a thread action followed, ignored, or violated Skiller guidance."""
+        return store.evaluate_guidance_adherence(
+            action_summary=action_summary,
+            thread_id=thread_id,
+            recommendation_event_id=recommendation_event_id,
+            task_description=task_description,
+            used_skill_names=used_skill_names or [],
+            used_learning_ids=used_learning_ids or [],
+            checks_performed=checks_performed or [],
+            outcome=outcome,
+            record=record,
+        )
 
     @mcp.tool()
     def propose_skill_update(skill_name: str, user_approved_update: bool = False) -> SkillProfile:

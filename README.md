@@ -46,6 +46,9 @@ With the server running, validate the MCP transport:
 - `review_skill_effectiveness`: measure attributed guidance outcomes, recurring pitfalls, and recommend a bounded review cadence.
 - `record_skill_run`: append reliability evidence for a skill invocation.
 - `recommend_skills`: rank captured or indexed skills for a task.
+- `record_guidance_recommendation`: persist what Skiller recommended for a thread or decision point.
+- `get_thread_guidance_context`: return the recommendation event plus linked learnings, memory context, guardrails, and known failure paths.
+- `evaluate_guidance_adherence`: classify a thread action as `followed`, `ignored`, `violated`, or `unknown` against Skiller guidance.
 - `propose_skill_update`: summarize failures and variants that should become guardrails.
 - `list_recent_learnings`: inspect recent captured learning records.
 - `get_skill_profile`: inspect a skill's catalog entry, reliability, guardrails, and drafts.
@@ -121,3 +124,13 @@ Apply inferred memory links and memory-derived learnings:
 Overseer expansion guidance is stored separately from code changes. Only records
 with `security_review_status=passed` can change bounded scanner configuration
 such as query terms, scan thresholds, scan limits, or private-search enablement.
+
+## Guidance Audit
+
+Skiller owns the evidence package for guidance compliance. Use
+`record_guidance_recommendation` at a decision point to store the ranked skills,
+linked learnings, memory references, guardrails, and known failure paths that
+applied to a thread. Later, call `evaluate_guidance_adherence` with the thread
+action summary, used skills, used learning ids, checks, and outcome to produce a
+structured finding. Overseer can consume the finding, but policy decisions and
+enforcement remain outside Skiller.
