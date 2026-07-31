@@ -29,6 +29,8 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Use `capture_work_product` after new, different, failed, or guardrail-producing work.
 - When a learning corrects or completes a prior failed/partial learning, pass `corrects_learning_ids` and the current `thread_id` to `capture_work_product`, or use `link_learning_correction` for an existing record.
 - Use `get_learning_lineage` before proposing a process update from a known learning id so child corrections and follow-on guardrails are applied with the root workflow.
+- Use `scan_learning_lineage` after a batch of learnings or when records look related but unlinked; review dry-run candidates before lowering thresholds.
+- Use `lineage_scan_due` or the installed `skiller-lineage-scan.timer` for periodic maintenance so new iterations are connected over time.
 - Use `record_skill_run` when a named skill was used and the outcome is known.
 - Use `recommend_skills` before work where prior local skill history may affect tool choice.
 - Use `refresh_skill_catalog` to index installed or project-local `SKILL.md` files before relying on recommendations.
@@ -59,6 +61,8 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Corrections must link back to the earliest known failed or partial learning, not only the most recent follow-up record.
 - When repairing old records, backfill the root or original learning so future recommendations can surface the correction chain.
 - If a thread id is known, attach it to both the correction and the corrected learning through Skiller lineage metadata.
+- Scanner-applied links must be explainable with shared skill, tags, terms, paths, thread IDs, or correction timing; do not silently link unrelated records.
+- Before a thread repeats a process, inspect `get_learning_lineage` or a relevant skill profile so prior follow-on issues and environment-specific resources are visible.
 
 ## Fallback
 

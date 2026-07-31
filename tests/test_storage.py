@@ -196,6 +196,122 @@ def test_link_learning_correction_repairs_existing_records(tmp_path: Path) -> No
     assert updated_correction.thread_ids == ["thread-2"]
 
 
+def test_scan_learning_lineage_links_related_iterations(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    root = store.capture_work_product(
+        SkillLearning(
+            title="Project MCP config initializes browser tools",
+            summary="Configure required Playwright MCP in project config for browser verification.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="codex-scope-manager",
+            tags=["playwright", "mcp", "tool-catalog"],
+            files_changed=["/home/god/Documents/Codex Workspace/DonutHole/.codex/config.toml"],
+            guardrails=["Restart the session before claiming the tool catalog is available."],
+        ),
+        create_drafts=False,
+    ).learning
+    intermediate = store.capture_work_product(
+        SkillLearning(
+            title="Project MCP config does not control managed runner catalogs",
+            summary="Roadex-managed turns require runner capability profile injection for Playwright MCP.",
+            novelty=Novelty.FAILURE,
+            outcome=Outcome.PARTIAL,
+            skill_name="codex-scope-manager",
+            tags=["roadex", "playwright", "mcp", "tool-catalog"],
+            files_changed=["/home/god/Documents/Codex Workspace/Roadex/src/server/runnerCapabilityProfile.ts"],
+        ),
+        create_drafts=False,
+    ).learning
+    correction = store.capture_work_product(
+        SkillLearning(
+            title="Correct managed runner Playwright MCP profile",
+            summary="Fix Roadex managed runner tool catalog by injecting bounded Playwright MCP.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="codex-scope-manager",
+            tags=["roadex", "playwright", "mcp", "tool-catalog"],
+            files_changed=["/home/god/Documents/Codex Workspace/Roadex/src/server/runnerCapabilityProfile.ts"],
+            guardrails=["Verify from a new managed turn, not just a local CLI session."],
+        ),
+        create_drafts=False,
+    ).learning
+
+    dry_run = store.scan_learning_lineage(threshold=7.0, dry_run=True)
+    applied = store.scan_learning_lineage(threshold=7.0, dry_run=False)
+    updated_root = store.get_learning(root.id)
+    updated_intermediate = store.get_learning(intermediate.id)
+    updated_correction = store.get_learning(correction.id)
+
+    assert dry_run.candidates >= 1
+    assert dry_run.applied == 0
+    assert applied.applied >= 1
+    assert updated_root is not None
+    assert updated_intermediate is not None
+    assert updated_correction is not None
+    assert correction.id in updated_intermediate.correction_learning_ids
+    assert updated_correction.corrects_learning_ids
+    assert "Verify from a new managed turn, not just a local CLI session." in store.propose_skill_update(
+        "codex-scope-manager"
+    ).suggested_guardrails
+
+
+def test_recommend_skills_uses_linked_follow_on_terms(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    root = store.capture_work_product(
+        SkillLearning(
+            title="Project MCP startup",
+            summary="Required project MCP configuration ensures tool catalog initialization.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="codex-scope-manager",
+            tags=["mcp"],
+        ),
+        create_drafts=False,
+    ).learning
+    store.capture_work_product(
+        SkillLearning(
+            title="Managed runner Playwright correction",
+            summary="Roadex managed runner catalogs need server-side Playwright profile injection.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="codex-scope-manager",
+            corrects_learning_ids=[root.id],
+            tags=["roadex", "playwright"],
+        ),
+        create_drafts=False,
+    )
+
+    recommendations = store.recommend_skills("roadex playwright managed runner profile", limit=3)
+
+    assert recommendations
+    assert recommendations[0].skill_name == "codex-scope-manager"
+
+
+def test_lineage_scan_due_uses_new_learning_or_age_threshold(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    for index in range(2):
+        store.capture_work_product(
+            SkillLearning(
+                title=f"Learning {index}",
+                summary="A small captured learning for due-check testing.",
+                novelty=Novelty.VARIANT,
+                outcome=Outcome.WORKED,
+                skill_name="skiller-mcp",
+            ),
+            create_drafts=False,
+        )
+
+    initial = store.lineage_scan_due(min_new_learnings=3, max_age_hours=24)
+    store.scan_learning_lineage(dry_run=True)
+    skipped = store.lineage_scan_due(min_new_learnings=3, max_age_hours=24)
+
+    assert initial["due"] is True
+    assert initial["reason"] == "no previous lineage scan"
+    assert skipped["due"] is False
+    assert skipped["new_learnings"] == 0
+
+
 def test_non_updatable_skill_blocks_draft_without_user_approval(tmp_path: Path) -> None:
     store = SkillerStore(tmp_path)
     policy = store.set_skill_policy("critical-skill", updatable=False, reason="Requires maintainer review.")

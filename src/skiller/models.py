@@ -177,4 +177,28 @@ class SkillProfile(BaseModel):
     draft_paths: list[str]
 
 
+class LineageLinkCandidate(BaseModel):
+    parent_learning_id: str
+    child_learning_id: str
+    root_learning_id: str = ""
+    score: float
+    reasons: list[str] = Field(default_factory=list, max_length=20)
+    applied: bool = False
+
+    @field_validator("reasons")
+    @classmethod
+    def strip_reasons(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item and item.strip()))
+
+
+class LineageScanResult(BaseModel):
+    scanned: int
+    candidates: int
+    applied: int
+    threshold: float
+    dry_run: bool
+    generated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    links: list[LineageLinkCandidate] = Field(default_factory=list, max_length=500)
+
+
 JsonDict = dict[str, Any]

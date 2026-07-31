@@ -12,6 +12,7 @@ from .models import (
     Outcome,
     SkillCatalogEntry,
     SkillLearning,
+    LineageScanResult,
     SkillPolicy,
     SkillProfile,
     SkillRecommendation,
@@ -111,6 +112,20 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
     def get_learning_lineage(learning_id: str) -> dict:
         """Return a captured learning with its root, parents, children, and corrections."""
         return store.get_learning_lineage(learning_id)
+
+    @mcp.tool()
+    def scan_learning_lineage(
+        threshold: float = 7.0,
+        limit: int = 100,
+        dry_run: bool = True,
+    ) -> LineageScanResult:
+        """Scan captured learnings for likely related work chains and optionally link them."""
+        return store.scan_learning_lineage(threshold=threshold, limit=limit, dry_run=dry_run)
+
+    @mcp.tool()
+    def lineage_scan_due(min_new_learnings: int = 10, max_age_hours: int = 24) -> dict:
+        """Report whether a periodic lineage scan should run based on new records or elapsed time."""
+        return store.lineage_scan_due(min_new_learnings=min_new_learnings, max_age_hours=max_age_hours)
 
     @mcp.tool()
     def record_skill_run(

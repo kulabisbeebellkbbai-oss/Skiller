@@ -10,6 +10,8 @@ from .models import (
     CatalogRefreshResult,
     CaptureResult,
     DraftArtifact,
+    LineageLinkCandidate,
+    LineageScanResult,
     Outcome,
     ReliabilitySummary,
     SkillCatalogEntry,
@@ -31,6 +33,7 @@ class SkillerStore:
         self.runs_path = data_dir / "skill_runs.jsonl"
         self.catalog_path = data_dir / "skill_catalog.jsonl"
         self.policies_path = data_dir / "skill_policies.jsonl"
+        self.lineage_scans_path = data_dir / "lineage_scans.jsonl"
         self.drafts_dir = data_dir / "drafts"
 
     def initialize(self) -> None:
@@ -40,6 +43,7 @@ class SkillerStore:
         self.runs_path.touch(exist_ok=True)
         self.catalog_path.touch(exist_ok=True)
         self.policies_path.touch(exist_ok=True)
+        self.lineage_scans_path.touch(exist_ok=True)
 
     def capture_work_product(
         self,
@@ -168,6 +172,69 @@ class SkillerStore:
             "children": sorted(children, key=lambda item: item.created_at),
         }
 
+    def scan_learning_lineage(
+        self,
+        threshold: float = 7.0,
+        limit: int = 100,
+        dry_run: bool = True,
+    ) -> LineageScanResult:
+        self.initialize()
+        records = sorted(self._learning_records(), key=lambda item: item.created_at)
+        candidates: list[LineageLinkCandidate] = []
+        for child_index, child in enumerate(records):
+            for parent in records[:child_index]:
+                candidate = self._lineage_candidate(parent, child, threshold)
+                if candidate is not None:
+                    candidates.append(candidate)
+        candidates = sorted(candidates, key=lambda item: item.score, reverse=True)[: max(1, min(limit, 500))]
+        applied = 0
+        if not dry_run:
+            for candidate in candidates:
+                self._apply_lineage_candidate(candidate)
+                candidate.applied = True
+                applied += 1
+        result = LineageScanResult(
+            scanned=len(records),
+            candidates=len(candidates),
+            applied=applied,
+            threshold=threshold,
+            dry_run=dry_run,
+            links=candidates,
+        )
+        self._append_jsonl(self.lineage_scans_path, result.model_dump(mode="json"))
+        return result
+
+    def lineage_scan_due(self, min_new_learnings: int = 10, max_age_hours: int = 24) -> dict[str, object]:
+        self.initialize()
+        records = self._learning_records()
+        scans = self._read_jsonl(self.lineage_scans_path)
+        if not scans:
+            return {
+                "due": bool(records),
+                "reason": "no previous lineage scan",
+                "learnings": len(records),
+                "new_learnings": len(records),
+                "last_scan_at": "",
+            }
+        last_scan = scans[-1]
+        last_scan_at = str(last_scan.get("generated_at") or "")
+        new_records = [record for record in records if record.created_at > last_scan_at]
+        age_hours = self._age_hours(last_scan_at)
+        due = len(new_records) >= min_new_learnings or age_hours >= max_age_hours
+        reason = "not due"
+        if len(new_records) >= min_new_learnings:
+            reason = "new learning threshold reached"
+        elif age_hours >= max_age_hours:
+            reason = "time threshold reached"
+        return {
+            "due": due,
+            "reason": reason,
+            "learnings": len(records),
+            "new_learnings": len(new_records),
+            "last_scan_at": last_scan_at,
+            "age_hours": round(age_hours, 3),
+        }
+
     def recommend_skills(self, task_description: str, limit: int = 5) -> list[SkillRecommendation]:
         task_terms = self._terms(task_description)
         if not task_terms:
@@ -177,6 +244,7 @@ class SkillerStore:
         for learning in self.list_recent_learnings(limit=50):
             if learning.skill_name:
                 grouped.setdefault(learning.skill_name, []).append(learning)
+        grouped = {skill_name: self._with_linked_learnings(learnings) for skill_name, learnings in grouped.items()}
 
         catalog = {entry.name: entry for entry in self.list_skill_catalog(limit=500)}
         skill_names = sorted(set(grouped) | set(catalog))
@@ -343,6 +411,121 @@ class SkillerStore:
                     selected[linked.id] = linked
                     to_visit.append(linked)
         return sorted(selected.values(), key=lambda item: item.created_at, reverse=True)
+
+    def _lineage_candidate(
+        self,
+        parent: SkillLearning,
+        child: SkillLearning,
+        threshold: float,
+    ) -> LineageLinkCandidate | None:
+        if parent.id == child.id:
+            return None
+        if child.id in parent.child_learning_ids or child.id in parent.correction_learning_ids:
+            return None
+        if parent.id in child.parent_learning_ids or parent.id in child.corrects_learning_ids:
+            return None
+
+        score = 0.0
+        reasons: list[str] = []
+        if parent.skill_name and child.skill_name and parent.skill_name == child.skill_name:
+            score += 3.0
+            reasons.append(f"same skill {parent.skill_name}")
+
+        shared_threads = set(parent.thread_ids) & set(child.thread_ids)
+        if shared_threads:
+            score += 4.0
+            reasons.append(f"shared thread {sorted(shared_threads)[0]}")
+
+        shared_tags = set(parent.tags) & set(child.tags)
+        if shared_tags:
+            tag_score = min(3.0, len(shared_tags) * 1.25)
+            score += tag_score
+            reasons.append(f"shared tags {', '.join(sorted(shared_tags)[:4])}")
+
+        parent_terms = self._learning_terms(parent)
+        child_terms = self._learning_terms(child)
+        shared_terms = parent_terms & child_terms
+        if shared_terms:
+            term_score = min(4.0, len(shared_terms) * 0.45)
+            score += term_score
+            reasons.append(f"shared terms {', '.join(sorted(shared_terms)[:8])}")
+
+        shared_paths = self._path_prefixes(parent.files_changed) & self._path_prefixes(child.files_changed)
+        if shared_paths:
+            score += min(2.0, len(shared_paths))
+            reasons.append(f"shared paths {', '.join(sorted(shared_paths)[:3])}")
+
+        if parent.outcome in {Outcome.FAILED, Outcome.PARTIAL} and child.outcome == Outcome.WORKED:
+            score += 2.0
+            reasons.append("later worked after failed or partial parent")
+        if child.novelty.value in {"guardrail", "variant"} and parent.novelty.value in {"failure", "guardrail", "variant"}:
+            score += 1.0
+            reasons.append("child is a follow-on variant or guardrail")
+        if self._looks_like_correction(parent, child):
+            score += 2.0
+            reasons.append("correction language overlaps")
+
+        if score < threshold:
+            return None
+        root_id = parent.root_learning_id or parent.id
+        return LineageLinkCandidate(
+            parent_learning_id=parent.id,
+            child_learning_id=child.id,
+            root_learning_id=root_id,
+            score=round(score, 3),
+            reasons=reasons,
+        )
+
+    def _apply_lineage_candidate(self, candidate: LineageLinkCandidate) -> None:
+        self.link_learning_correction(
+            correction_learning_id=candidate.child_learning_id,
+            corrects_learning_ids=[candidate.parent_learning_id],
+            root_learning_id=candidate.root_learning_id,
+        )
+
+    def _learning_terms(self, learning: SkillLearning) -> set[str]:
+        text = " ".join(
+            [
+                learning.title,
+                learning.summary,
+                learning.task_context,
+                learning.reliability_impact,
+                " ".join(learning.tags),
+                " ".join(learning.reusable_steps),
+                " ".join(learning.guardrails),
+            ]
+        )
+        return self._terms(text)
+
+    def _path_prefixes(self, paths: list[str]) -> set[str]:
+        prefixes: set[str] = set()
+        for raw in paths:
+            path = Path(raw)
+            parts = path.parts
+            if "Codex Workspace" in parts:
+                index = parts.index("Codex Workspace")
+                if len(parts) > index + 1:
+                    prefixes.add("/".join(parts[: index + 2]))
+                    continue
+            if len(parts) >= 4:
+                prefixes.add("/".join(parts[:4]))
+        return prefixes
+
+    def _looks_like_correction(self, parent: SkillLearning, child: SkillLearning) -> bool:
+        child_text = " ".join([child.title, child.summary, child.task_context]).lower()
+        if not re.search(r"\b(fix|correct|repair|follow-on|followup|after|remediat|backfill|supersed)", child_text):
+            return False
+        return bool(self._learning_terms(parent) & self._learning_terms(child))
+
+    @staticmethod
+    def _age_hours(iso_timestamp: str) -> float:
+        try:
+            parsed = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            return float("inf")
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds() / 3600
 
     @staticmethod
     def _merge_ids(existing: list[str], additions: list[str]) -> list[str]:

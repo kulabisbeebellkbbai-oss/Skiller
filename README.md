@@ -36,6 +36,8 @@ With the server running, validate the MCP transport:
 - `capture_work_product`: record reusable new, variant, guardrail, or failure learnings.
 - `link_learning_correction`: connect an existing correction learning to earlier records it corrects.
 - `get_learning_lineage`: inspect a learning's root, parent, child, and correction records.
+- `scan_learning_lineage`: infer related learning chains across existing records and optionally link them.
+- `lineage_scan_due`: decide whether a periodic scanner run is due from new-learning count or elapsed time.
 - `record_skill_run`: append reliability evidence for a skill invocation.
 - `recommend_skills`: rank captured or indexed skills for a task.
 - `propose_skill_update`: summarize failures and variants that should become guardrails.
@@ -70,3 +72,17 @@ Skiller writes only under its configured data directory. By default that is `./d
 ## Learning Lineage
 
 When a later learning corrects an earlier failed or partial process, pass `corrects_learning_ids` and, when known, `thread_id` to `capture_work_product`. Skiller backfills the corrected record with `child_learning_ids`, `correction_learning_ids`, and `thread_ids` so future recommendations and profiles can pull the follow-on guardrails into the root workflow. Use `link_learning_correction` to repair older records that were captured before the lineage was known.
+
+Run a reviewable lineage scan:
+
+```bash
+.venv/bin/skiller scan-lineage --data-dir data --force
+```
+
+Apply inferred links:
+
+```bash
+.venv/bin/skiller scan-lineage --data-dir data --apply --force
+```
+
+The installer can create `skiller-lineage-scan.timer`, which runs hourly and lets Skiller skip work unless enough new learnings accumulated or the time threshold has elapsed.

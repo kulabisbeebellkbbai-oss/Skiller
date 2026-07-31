@@ -16,6 +16,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
 HOOK_NAME = "skiller_mcp_guard.py"
 SERVICE_NAME = "skiller-mcp.service"
+LINEAGE_SERVICE_NAME = "skiller-lineage-scan.service"
+LINEAGE_TIMER_NAME = "skiller-lineage-scan.timer"
 
 
 def load_hooks(path: Path) -> dict[str, Any]:
@@ -79,6 +81,36 @@ WantedBy=default.target
     return service_path
 
 
+def install_lineage_timer(service_dir: Path, python_bin: Path, data_dir: Path) -> tuple[Path, Path]:
+    service_dir.mkdir(parents=True, exist_ok=True)
+    service_path = service_dir / LINEAGE_SERVICE_NAME
+    timer_path = service_dir / LINEAGE_TIMER_NAME
+    scanner_path = PROJECT_ROOT / "scripts" / "run_lineage_scan.py"
+    service_text = f"""[Unit]
+Description=Skiller learning lineage scan
+
+[Service]
+Type=oneshot
+WorkingDirectory={PROJECT_ROOT}
+ExecStart="{python_bin}" "{scanner_path}" --data-dir "{data_dir}" --min-new-learnings 10 --max-age-hours 24 --threshold 7.0 --limit 100
+"""
+    timer_text = f"""[Unit]
+Description=Run Skiller learning lineage scan periodically
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"""
+    service_path.write_text(service_text, encoding="utf-8")
+    timer_path.write_text(timer_text, encoding="utf-8")
+    return service_path, timer_path
+
+
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, capture_output=True, check=False)
 
@@ -88,6 +120,7 @@ def main() -> int:
     parser.add_argument("--codex-home", type=Path, default=DEFAULT_CODEX_HOME)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-service", action="store_true")
+    parser.add_argument("--skip-lineage-timer", action="store_true")
     args = parser.parse_args()
 
     codex_home = args.codex_home.expanduser().resolve()
@@ -104,6 +137,8 @@ def main() -> int:
     merge_hook(config, "Stop", f"{command_base} --stop-check", "Checking Skiller MCP evidence")
 
     service_path = Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME
+    lineage_service_path = Path.home() / ".config" / "systemd" / "user" / LINEAGE_SERVICE_NAME
+    lineage_timer_path = Path.home() / ".config" / "systemd" / "user" / LINEAGE_TIMER_NAME
 
     if args.dry_run:
         print(json.dumps({
@@ -113,6 +148,9 @@ def main() -> int:
             "hooks_json": str(hooks_json),
             "service_path": str(service_path),
             "would_install_service": not args.skip_service,
+            "lineage_service_path": str(lineage_service_path),
+            "lineage_timer_path": str(lineage_timer_path),
+            "would_install_lineage_timer": not args.skip_lineage_timer,
         }, indent=2))
         return 0
 
@@ -133,6 +171,13 @@ def main() -> int:
             "daemon_reload": run(["systemctl", "--user", "daemon-reload"]).returncode,
             "enable": run(["systemctl", "--user", "enable", "--now", SERVICE_NAME]).returncode,
         }
+    lineage_timer_result = None
+    if not args.skip_lineage_timer:
+        install_lineage_timer(lineage_service_path.parent, python_bin, data_dir)
+        lineage_timer_result = {
+            "daemon_reload": run(["systemctl", "--user", "daemon-reload"]).returncode,
+            "enable": run(["systemctl", "--user", "enable", "--now", LINEAGE_TIMER_NAME]).returncode,
+        }
 
     print(json.dumps({
         "installed_hook": str(hook_target),
@@ -141,6 +186,9 @@ def main() -> int:
         "backup": str(backup_path) if backup_path else None,
         "service": str(service_path) if not args.skip_service else None,
         "service_result": service_result,
+        "lineage_service": str(lineage_service_path) if not args.skip_lineage_timer else None,
+        "lineage_timer": str(lineage_timer_path) if not args.skip_lineage_timer else None,
+        "lineage_timer_result": lineage_timer_result,
         "review": "Run /hooks and trust the changed Skiller hook entries.",
     }, indent=2))
     return 0

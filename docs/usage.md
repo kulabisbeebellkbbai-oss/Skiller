@@ -45,3 +45,21 @@ When follow-on work fixes a failed, partial, or incomplete learning, capture it 
 ```
 
 Skiller records those fields on the correction and backfills the earlier learning with `child_learning_ids`, `correction_learning_ids`, and `thread_ids`. `get_learning_lineage` returns the linked root, parents, children, and corrections. Use `link_learning_correction` when an already-captured correction needs to be attached to its original learning after the fact.
+
+## Lineage Scans
+
+Use `scan_learning_lineage` or the equivalent CLI command to scan existing records for likely related iterations:
+
+```bash
+.venv/bin/skiller scan-lineage --data-dir data --threshold 7 --limit 100 --force
+```
+
+The scanner scores pairs by shared skill, tags, key terms, paths, thread IDs, failure-to-worked timing, and correction language. A dry run records candidates without applying links. Add `--apply` to persist inferred parent/correction links.
+
+For unattended maintenance, use:
+
+```bash
+.venv/bin/python scripts/run_lineage_scan.py --data-dir data --min-new-learnings 10 --max-age-hours 24
+```
+
+This wrapper first calls the due check and skips unless the new-learning threshold or time threshold is reached. `scripts/install_skiller_hooks.py` installs a user systemd timer for this wrapper by default.
