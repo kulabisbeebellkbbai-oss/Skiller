@@ -13,6 +13,8 @@ from .models import (
     SkillCatalogEntry,
     SkillLearning,
     LineageScanResult,
+    MemoryScanResult,
+    OverseerGuidance,
     SkillPolicy,
     SkillProfile,
     SkillRecommendation,
@@ -126,6 +128,73 @@ def create_server(data_dir: Path | None = None, host: str = DEFAULT_HOST, port: 
     def lineage_scan_due(min_new_learnings: int = 10, max_age_hours: int = 24) -> dict:
         """Report whether a periodic lineage scan should run based on new records or elapsed time."""
         return store.lineage_scan_due(min_new_learnings=min_new_learnings, max_age_hours=max_age_hours)
+
+    @mcp.tool()
+    def scan_memory_records(
+        memory_root: str = "",
+        include_private_search: bool | None = None,
+        private_queries: list[str] | None = None,
+        threshold: float | None = None,
+        limit: int | None = None,
+        dry_run: bool = True,
+    ) -> MemoryScanResult:
+        """Scan AI memory records for skill-related guidance and link or create Skiller learnings."""
+        return store.scan_memory_records(
+            memory_root=memory_root,
+            include_private_search=include_private_search,
+            private_queries=private_queries or [],
+            threshold=threshold,
+            limit=limit,
+            dry_run=dry_run,
+        )
+
+    @mcp.tool()
+    def memory_scan_due(min_new_records: int = 5, max_age_hours: int = 24, memory_root: str = "") -> dict:
+        """Report whether a periodic memory-to-learning scan should run."""
+        return store.memory_scan_due(
+            min_new_records=min_new_records,
+            max_age_hours=max_age_hours,
+            memory_root=memory_root,
+        )
+
+    @mcp.tool()
+    def get_learning_memory_context(
+        learning_id: str,
+        memory_root: str = "",
+        include_private_search: bool = False,
+    ) -> dict:
+        """Return a learning plus linked AI-memory summaries that can still be resolved."""
+        return store.get_learning_memory_context(
+            learning_id=learning_id,
+            memory_root=memory_root,
+            include_private_search=include_private_search,
+        )
+
+    @mcp.tool()
+    def record_overseer_guidance(
+        title: str,
+        recommendation: str,
+        security_review_status: str = "pending",
+        security_review_evidence: list[str] | None = None,
+        action: str = "note_only",
+        value: str = "",
+        source: str = "overseer",
+    ) -> OverseerGuidance:
+        """Record Overseer guidance for future memory-scan expansion; only passed reviews can be applied."""
+        return store.record_overseer_guidance(
+            title=title,
+            recommendation=recommendation,
+            security_review_status=security_review_status,
+            security_review_evidence=security_review_evidence or [],
+            action=action,
+            value=value,
+            source=source,
+        )
+
+    @mcp.tool()
+    def apply_overseer_guidance() -> dict:
+        """Apply security-reviewed Overseer guidance to bounded memory-scan configuration."""
+        return store.apply_overseer_guidance()
 
     @mcp.tool()
     def record_skill_run(

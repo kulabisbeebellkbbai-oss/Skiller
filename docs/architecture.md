@@ -17,4 +17,12 @@ The server is intentionally conservative. It can draft skill and memory files un
 - `propose_skill_update`: summarize guardrails or changes suggested by recent failures and variants.
 - `list_recent_learnings`: inspect recent captured records.
 - `get_skill_profile`: inspect one skill's summaries, artifacts, and reliability.
+- `scan_memory_records`: link safe AI-memory registry summaries to learnings or create memory-derived learnings.
+- `record_overseer_guidance` / `apply_overseer_guidance`: accept external expansion guidance, but only apply bounded configuration changes after a passed security review.
 
+## Memory Bridge
+
+Skiller's memory bridge is provenance-based. It stores memory identifiers on
+learning records and records memory-scan history, but it does not copy raw
+rollout logs, passphrases, secrets, or bulk private memory vault contents into
+the Skiller store. Private-memory search is opt-in and query-limited.

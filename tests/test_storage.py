@@ -357,6 +357,104 @@ def test_lineage_scan_due_uses_new_learning_or_age_threshold(tmp_path: Path) -> 
     assert skipped["new_learnings"] == 0
 
 
+def test_scan_memory_records_links_existing_learning(tmp_path: Path) -> None:
+    memory_root = tmp_path / "memories"
+    memory_root.mkdir()
+    (memory_root / "MEMORY.md").write_text(
+        """# Task Group: Skiller hook diagnostics
+
+## Reusable knowledge
+
+- skiller-mcp should verify hook diagnostics before changing repeated-warning guards. Before closing the task, run the exact hook prompt through the installed hook and verify the MCP evidence path.
+""",
+        encoding="utf-8",
+    )
+    store = SkillerStore(tmp_path / "data")
+    learning = store.capture_work_product(
+        SkillLearning(
+            title="Skiller hook diagnostics",
+            summary="The skiller-mcp hook diagnostic workflow verifies repeated warning guards with exact hook prompts.",
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name="skiller-mcp",
+            tags=["hooks", "diagnostics"],
+        ),
+        create_drafts=False,
+    ).learning
+
+    dry_run = store.scan_memory_records(memory_root=str(memory_root), threshold=5.0, dry_run=True)
+    applied = store.scan_memory_records(memory_root=str(memory_root), threshold=5.0, dry_run=False)
+    updated = store.get_learning(learning.id)
+    context = store.get_learning_memory_context(learning.id, memory_root=str(memory_root))
+
+    assert dry_run.candidates == 1
+    assert dry_run.linked == 0
+    assert applied.linked == 1
+    assert updated is not None
+    assert updated.memory_record_ids
+    assert context["memories"]
+    assert context["missing_memory_record_ids"] == []
+
+
+def test_scan_memory_records_creates_learning_from_skill_memory(tmp_path: Path) -> None:
+    memory_root = tmp_path / "memories"
+    memory_root.mkdir()
+    (memory_root / "MEMORY.md").write_text(
+        """# Task Group: Scope manager approval guardrail
+
+## Reusable knowledge
+
+- codex-scope-manager must keep hook updates in the right Codex scope. Before changing hooks, verify the user-level destination and tell the user to run /hooks after install.
+""",
+        encoding="utf-8",
+    )
+    skill_dir = tmp_path / "skills" / "codex-scope-manager"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: codex-scope-manager
+description: Manage durable Codex hooks, skills, memories, and installation scopes.
+---
+""",
+        encoding="utf-8",
+    )
+    store = SkillerStore(tmp_path / "data")
+    store.refresh_skill_catalog([str(tmp_path / "skills")])
+
+    result = store.scan_memory_records(memory_root=str(memory_root), threshold=5.0, dry_run=False)
+    learnings = store.list_recent_learnings(skill_name="codex-scope-manager")
+
+    assert result.created == 1
+    assert learnings
+    assert learnings[0].memory_record_ids
+    assert "memory-derived" in learnings[0].tags
+
+
+def test_overseer_guidance_requires_passed_security_review(tmp_path: Path) -> None:
+    store = SkillerStore(tmp_path)
+    blocked = store.record_overseer_guidance(
+        title="Enable private search without review",
+        recommendation="Enable private memory search before the security review.",
+        security_review_status="pending",
+        action="enable_private_memory_search",
+    )
+    passed = store.record_overseer_guidance(
+        title="Raise scan limit after review",
+        recommendation="A reviewed configuration change can raise the bounded scan limit.",
+        security_review_status="passed",
+        security_review_evidence=["Overseer Odo review passed for bounded config-only change."],
+        action="set_memory_scan_limit",
+        value="150",
+    )
+
+    result = store.apply_overseer_guidance()
+
+    assert [item["id"] for item in result["blocked"]] == [blocked.id]
+    assert [item["id"] for item in result["applied"]] == [passed.id]
+    assert result["config"]["limit"] == 150
+    assert result["config"]["include_private_search"] is False
+
+
 def test_non_updatable_skill_blocks_draft_without_user_approval(tmp_path: Path) -> None:
     store = SkillerStore(tmp_path)
     policy = store.set_skill_policy("critical-skill", updatable=False, reason="Requires maintainer review.")

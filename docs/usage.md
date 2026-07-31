@@ -70,3 +70,37 @@ quiet-period fallback. Each invocation records an effectiveness review, chooses
 bounded count and age thresholds from current activity and regressions, and runs
 the conservative lineage scan only when due. For attributable results, callers
 should pass `guidance_learning_ids` and `pitfalls_avoided` to `record_skill_run`.
+
+## AI Memory Association
+
+Use `scan_memory_records` or the equivalent CLI command to associate AI memory
+records with Skiller learnings:
+
+```bash
+.venv/bin/skiller scan-memory --data-dir data --threshold 8 --limit 100 --force
+```
+
+The scanner reads the experimental Codex memory registry by default, skips
+secret-looking entries, and avoids bulk rollout logs. It links matching memories
+to existing learnings through `memory_record_ids`. If a memory is clearly about
+an indexed skill but no learning exists yet, `--apply` creates a
+memory-derived guardrail learning with provenance evidence.
+
+Use `get_learning_memory_context` with a learning id to resolve linked
+`memory_record_ids` back to the currently available memory summaries.
+
+For unattended maintenance, use:
+
+```bash
+.venv/bin/python scripts/run_memory_scan.py --data-dir data --apply
+```
+
+The installer creates `skiller-memory-scan.service`, `skiller-memory-scan.timer`,
+and `skiller-memory-scan.path`. The path unit reacts to changes in the local
+memory registry and Skiller learnings, while the timer supplies a quiet-period
+fallback.
+
+Overseer can send expansion guidance through `record_overseer_guidance`.
+`apply_overseer_guidance` only applies bounded configuration actions when the
+guidance record has `security_review_status=passed`; pending or failed reviews
+remain recorded but unapplied.

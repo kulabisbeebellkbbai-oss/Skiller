@@ -38,6 +38,11 @@ With the server running, validate the MCP transport:
 - `get_learning_lineage`: inspect a learning's root, parent, child, and correction records.
 - `scan_learning_lineage`: infer related learning chains across existing records and optionally link them.
 - `lineage_scan_due`: decide whether a periodic scanner run is due from new-learning count or elapsed time.
+- `scan_memory_records`: scan AI memory records for skill-relevant guidance, link matching learnings, or create memory-derived learnings.
+- `memory_scan_due`: decide whether a periodic AI-memory association run is due.
+- `get_learning_memory_context`: resolve a learning's `memory_record_ids` back to available AI-memory summaries.
+- `record_overseer_guidance`: store Overseer guidance for future scanner expansion with security review metadata.
+- `apply_overseer_guidance`: apply only security-reviewed bounded scanner configuration changes.
 - `review_skill_effectiveness`: measure attributed guidance outcomes, recurring pitfalls, and recommend a bounded review cadence.
 - `record_skill_run`: append reliability evidence for a skill invocation.
 - `recommend_skills`: rank captured or indexed skills for a task.
@@ -72,6 +77,13 @@ review records its decisions in `data/effectiveness_reviews.jsonl`. Supply
 `guidance_learning_ids` and `pitfalls_avoided` when recording a skill run so
 guidance effectiveness can be attributed rather than inferred.
 
+The installer also enables `skiller-memory-scan.service`, `skiller-memory-scan.timer`,
+and `skiller-memory-scan.path`. This maintenance path scans safe AI-memory
+registry summaries, links matching memories to `memory_record_ids` on learnings,
+and can create memory-derived learning records for cataloged skills. Private
+memory search is disabled by default and can only be enabled through an applied
+configuration change or explicit CLI flag.
+
 The Skiller preflight hook calls Skiller immediately with `recommend_skills`; the Stop hook is only a backstop for missing evidence and repeated warning/error patterns.
 
 Skiller writes only under its configured data directory. By default that is `./data` in the current working directory. Draft skills and memory notes are stored under `data/drafts/` for review before installing them into a global Codex scope. Skill update policies are stored in `data/skill_policies.jsonl`; protected skills require `user_approved_update=true` before Skiller drafts updates for them.
@@ -93,3 +105,19 @@ Apply inferred links:
 ```
 
 The installer can create `skiller-lineage-scan.timer`, which runs hourly and lets Skiller skip work unless enough new learnings accumulated or the time threshold has elapsed.
+
+Run a reviewable AI-memory association scan:
+
+```bash
+.venv/bin/skiller scan-memory --data-dir data --force
+```
+
+Apply inferred memory links and memory-derived learnings:
+
+```bash
+.venv/bin/skiller scan-memory --data-dir data --apply --force
+```
+
+Overseer expansion guidance is stored separately from code changes. Only records
+with `security_review_status=passed` can change bounded scanner configuration
+such as query terms, scan thresholds, scan limits, or private-search enablement.

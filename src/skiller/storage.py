@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+from hashlib import sha256
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .models import (
     CatalogRefreshResult,
@@ -13,7 +16,11 @@ from .models import (
     EffectivenessReview,
     LineageLinkCandidate,
     LineageScanResult,
+    MemoryLinkCandidate,
+    MemoryScanResult,
+    Novelty,
     Outcome,
+    OverseerGuidance,
     ReliabilitySummary,
     SkillCatalogEntry,
     SkillLearning,
@@ -36,6 +43,10 @@ class SkillerStore:
         self.policies_path = data_dir / "skill_policies.jsonl"
         self.lineage_scans_path = data_dir / "lineage_scans.jsonl"
         self.effectiveness_reviews_path = data_dir / "effectiveness_reviews.jsonl"
+        self.memory_scans_path = data_dir / "memory_scans.jsonl"
+        self.memory_links_path = data_dir / "memory_links.jsonl"
+        self.overseer_guidance_path = data_dir / "overseer_guidance.jsonl"
+        self.memory_scan_config_path = data_dir / "memory_scan_config.json"
         self.drafts_dir = data_dir / "drafts"
 
     def initialize(self) -> None:
@@ -47,6 +58,9 @@ class SkillerStore:
         self.policies_path.touch(exist_ok=True)
         self.lineage_scans_path.touch(exist_ok=True)
         self.effectiveness_reviews_path.touch(exist_ok=True)
+        self.memory_scans_path.touch(exist_ok=True)
+        self.memory_links_path.touch(exist_ok=True)
+        self.overseer_guidance_path.touch(exist_ok=True)
 
     def capture_work_product(
         self,
@@ -84,6 +98,203 @@ class SkillerStore:
         self.initialize()
         self._append_jsonl(self.runs_path, run.model_dump(mode="json"))
         return self.reliability_summary(run.skill_name)
+
+    def scan_memory_records(
+        self,
+        memory_root: str = "",
+        include_private_search: bool | None = None,
+        private_queries: list[str] | None = None,
+        threshold: float | None = None,
+        limit: int | None = None,
+        dry_run: bool = True,
+    ) -> MemoryScanResult:
+        self.initialize()
+        config = self._memory_scan_config()
+        effective_threshold = float(threshold if threshold is not None else config.get("threshold", 8.0))
+        effective_limit = int(limit if limit is not None else config.get("limit", 100))
+        effective_private = bool(
+            include_private_search if include_private_search is not None else config.get("include_private_search", False)
+        )
+        queries = list(dict.fromkeys((private_queries or []) + list(config.get("private_queries", []))))
+        memories = self._memory_records(memory_root=memory_root, include_private_search=effective_private, private_queries=queries)
+        learnings = self._learning_records()
+        catalog = self.list_skill_catalog(limit=500)
+        candidates: list[MemoryLinkCandidate] = []
+        for memory in memories:
+            best_learning = self._memory_learning_candidate(memory, learnings, effective_threshold)
+            if best_learning is not None:
+                candidates.append(best_learning)
+                continue
+            created = self._memory_create_candidate(memory, catalog, effective_threshold)
+            if created is not None:
+                candidates.append(created)
+        candidates = sorted(candidates, key=lambda item: item.score, reverse=True)[: max(1, min(effective_limit, 500))]
+        linked = 0
+        created_count = 0
+        if not dry_run:
+            for candidate in candidates:
+                if candidate.action == "link":
+                    self._apply_memory_link(candidate)
+                    linked += 1
+                elif candidate.action == "create_learning":
+                    created_learning = self._create_learning_from_memory(candidate, memories)
+                    candidate.learning_id = created_learning.id
+                    created_count += 1
+                candidate.applied = True
+                self._append_jsonl(self.memory_links_path, candidate.model_dump(mode="json"))
+        result = MemoryScanResult(
+            scanned_memories=len(memories),
+            scanned_learnings=len(learnings),
+            candidates=len(candidates),
+            linked=linked,
+            created=created_count,
+            threshold=effective_threshold,
+            dry_run=dry_run,
+            links=candidates,
+        )
+        self._append_jsonl(self.memory_scans_path, result.model_dump(mode="json"))
+        return result
+
+    def memory_scan_due(self, min_new_records: int = 5, max_age_hours: int = 24, memory_root: str = "") -> dict[str, object]:
+        self.initialize()
+        scans = self._read_jsonl(self.memory_scans_path)
+        memories = self._memory_records(memory_root=memory_root, include_private_search=False, private_queries=[])
+        learnings = self._learning_records()
+        if not scans:
+            return {
+                "due": bool(memories and learnings),
+                "reason": "no previous memory scan",
+                "memories": len(memories),
+                "learnings": len(learnings),
+                "new_records": len(memories) + len(learnings),
+                "last_scan_at": "",
+            }
+        last_scan_at = str(scans[-1].get("generated_at") or "")
+        age_hours = self._age_hours(last_scan_at)
+        new_learnings = [item for item in learnings if item.created_at > last_scan_at]
+        # Experimental memory registry entries are stable summaries without reliable per-entry timestamps.
+        new_records = len(new_learnings)
+        due = new_records >= min_new_records or age_hours >= max_age_hours
+        reason = "not due"
+        if new_records >= min_new_records:
+            reason = "new learning threshold reached"
+        elif age_hours >= max_age_hours:
+            reason = "time threshold reached"
+        return {
+            "due": due,
+            "reason": reason,
+            "memories": len(memories),
+            "learnings": len(learnings),
+            "new_records": new_records,
+            "last_scan_at": last_scan_at,
+            "age_hours": round(age_hours, 3),
+        }
+
+    def get_learning_memory_context(
+        self,
+        learning_id: str,
+        memory_root: str = "",
+        include_private_search: bool = False,
+    ) -> dict[str, object]:
+        self.initialize()
+        learning = self.get_learning(learning_id)
+        if learning is None:
+            return {"learning": None, "memories": []}
+        config = self._memory_scan_config()
+        memories = self._memory_records(
+            memory_root=memory_root,
+            include_private_search=include_private_search,
+            private_queries=list(config.get("private_queries", [])),
+        )
+        by_id = {item["id"]: item for item in memories}
+        return {
+            "learning": learning,
+            "memories": [by_id[item] for item in learning.memory_record_ids if item in by_id],
+            "missing_memory_record_ids": [item for item in learning.memory_record_ids if item not in by_id],
+        }
+
+    def record_overseer_guidance(
+        self,
+        title: str,
+        recommendation: str,
+        security_review_status: str = "pending",
+        security_review_evidence: list[str] | None = None,
+        action: str = "note_only",
+        value: str = "",
+        source: str = "overseer",
+    ) -> OverseerGuidance:
+        self.initialize()
+        guidance = OverseerGuidance(
+            title=title,
+            recommendation=recommendation,
+            security_review_status=security_review_status,
+            security_review_evidence=security_review_evidence or [],
+            action=action,
+            value=value,
+            source=source,
+        )
+        self._append_jsonl(self.overseer_guidance_path, guidance.model_dump(mode="json"))
+        return guidance
+
+    def apply_overseer_guidance(self) -> dict[str, object]:
+        self.initialize()
+        records = [OverseerGuidance.model_validate(item) for item in self._read_jsonl(self.overseer_guidance_path)]
+        config = self._memory_scan_config()
+        applied: list[OverseerGuidance] = []
+        pending: list[OverseerGuidance] = []
+        blocked: list[OverseerGuidance] = []
+        changed = False
+        for guidance in records:
+            if guidance.applied:
+                continue
+            if guidance.security_review_status != "passed":
+                blocked.append(guidance)
+                continue
+            if guidance.action == "add_memory_query":
+                queries = list(config.get("private_queries", []))
+                if guidance.value and guidance.value not in queries:
+                    queries.append(guidance.value)
+                    config["private_queries"] = queries[:50]
+                    changed = True
+            elif guidance.action == "set_memory_scan_threshold":
+                try:
+                    config["threshold"] = max(3.0, min(25.0, float(guidance.value)))
+                    changed = True
+                except ValueError:
+                    pending.append(guidance)
+                    continue
+            elif guidance.action == "set_memory_scan_limit":
+                try:
+                    config["limit"] = max(1, min(500, int(guidance.value)))
+                    changed = True
+                except ValueError:
+                    pending.append(guidance)
+                    continue
+            elif guidance.action == "enable_private_memory_search":
+                config["include_private_search"] = True
+                changed = True
+            elif guidance.action == "disable_private_memory_search":
+                config["include_private_search"] = False
+                changed = True
+            elif guidance.action == "note_only":
+                pass
+            guidance.applied = True
+            guidance.applied_at = datetime.now(UTC).isoformat()
+            applied.append(guidance)
+        if changed:
+            self.memory_scan_config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        if applied:
+            by_id = {item.id: item for item in records}
+            for item in applied:
+                by_id[item.id] = item
+            ordered = [item.model_dump(mode="json") for item in by_id.values()]
+            self._write_jsonl(self.overseer_guidance_path, ordered)
+        return {
+            "applied": [item.model_dump(mode="json") for item in applied],
+            "blocked": [item.model_dump(mode="json") for item in blocked],
+            "pending": [item.model_dump(mode="json") for item in pending],
+            "config": config,
+        }
 
     def review_effectiveness(self) -> EffectivenessReview:
         """Measure attributed guidance outcomes and recommend a bounded review cadence."""
@@ -404,6 +615,252 @@ class SkillerStore:
 
     def _write_learning_records(self, records: list[SkillLearning]) -> None:
         self._write_jsonl(self.learnings_path, [record.model_dump(mode="json") for record in records])
+
+    def _memory_scan_config(self) -> dict[str, Any]:
+        if not self.memory_scan_config_path.exists():
+            return {
+                "threshold": 8.0,
+                "limit": 100,
+                "include_private_search": False,
+                "private_queries": [],
+            }
+        try:
+            loaded = json.loads(self.memory_scan_config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {
+                "threshold": 8.0,
+                "limit": 100,
+                "include_private_search": False,
+                "private_queries": [],
+            }
+        if not isinstance(loaded, dict):
+            return {"threshold": 8.0, "limit": 100, "include_private_search": False, "private_queries": []}
+        loaded.setdefault("threshold", 8.0)
+        loaded.setdefault("limit", 100)
+        loaded.setdefault("include_private_search", False)
+        loaded.setdefault("private_queries", [])
+        return loaded
+
+    def _memory_records(
+        self,
+        memory_root: str = "",
+        include_private_search: bool = False,
+        private_queries: list[str] | None = None,
+    ) -> list[dict[str, str]]:
+        records = self._experimental_memory_records(memory_root)
+        if include_private_search:
+            records.extend(self._private_memory_search_records(private_queries or []))
+        deduped: dict[str, dict[str, str]] = {}
+        for record in records:
+            deduped[record["id"]] = record
+        return list(deduped.values())
+
+    def _experimental_memory_records(self, memory_root: str = "") -> list[dict[str, str]]:
+        root = Path(memory_root).expanduser() if memory_root else Path.home() / ".codex" / "memories"
+        registry = root / "MEMORY.md"
+        if not registry.exists():
+            return []
+        text = registry.read_text(encoding="utf-8", errors="ignore")
+        records: list[dict[str, str]] = []
+        current_title = ""
+        current_lines: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("# "):
+                self._append_memory_record(records, "experimental-memory", current_title, current_lines)
+                current_title = line.lstrip("#").strip()
+                current_lines = []
+            elif line.startswith("## ") or line.startswith("### "):
+                self._append_memory_record(records, "experimental-memory", current_title, current_lines)
+                current_title = line.lstrip("#").strip()
+                current_lines = []
+            elif line.strip():
+                current_lines.append(line.strip())
+        self._append_memory_record(records, "experimental-memory", current_title, current_lines)
+        return records
+
+    def _private_memory_search_records(self, queries: list[str]) -> list[dict[str, str]]:
+        if not queries:
+            queries = [entry.name for entry in self.list_skill_catalog(limit=20)]
+        helper = Path.home() / ".codex" / "skills" / "private-ai-memory" / "scripts" / "codex-memory.sh"
+        if not helper.exists():
+            return []
+        records: list[dict[str, str]] = []
+        for query in queries[:20]:
+            completed = subprocess.run(
+                [str(helper), "--command", "search", "--query", query, "--limit", "5"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+            if completed.returncode != 0 or not completed.stdout.strip():
+                continue
+            try:
+                payload = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                continue
+            for item in payload.get("memories", []) if isinstance(payload, dict) else []:
+                title = str(item.get("title") or "")
+                body = str(item.get("body") or "")
+                memory_id = str(item.get("id") or self._memory_id("private-ai-memory", title, body))
+                if title and body:
+                    records.append({
+                        "id": f"private-ai-memory:{memory_id}",
+                        "source": "private-ai-memory-search",
+                        "title": title,
+                        "body": body[:4000],
+                    })
+        return records
+
+    def _append_memory_record(self, records: list[dict[str, str]], source: str, title: str, lines: list[str]) -> None:
+        body = "\n".join(lines).strip()
+        if not title or len(body) < 40:
+            return
+        if title.strip().lower() in {"keywords", "rollout_summary_files"}:
+            return
+        if self._looks_sensitive(title, body):
+            return
+        records.append({
+            "id": self._memory_id(source, title, body),
+            "source": source,
+            "title": title[:160],
+            "body": body[:4000],
+        })
+
+    def _memory_learning_candidate(
+        self,
+        memory: dict[str, str],
+        learnings: list[SkillLearning],
+        threshold: float,
+    ) -> MemoryLinkCandidate | None:
+        memory_terms = self._terms(" ".join([memory["title"], memory["body"]]))
+        best: MemoryLinkCandidate | None = None
+        for learning in learnings:
+            if memory["id"] in learning.memory_record_ids:
+                continue
+            learning_terms = self._learning_terms(learning)
+            shared_terms = memory_terms & learning_terms
+            if not shared_terms:
+                continue
+            score = min(4.0, len(shared_terms) * 0.45)
+            reasons = [f"shared terms {', '.join(sorted(shared_terms)[:8])}"]
+            if learning.skill_name and learning.skill_name in memory_terms:
+                score += 3.0
+                reasons.append(f"memory names skill {learning.skill_name}")
+            shared_tags = set(learning.tags) & memory_terms
+            if shared_tags:
+                score += min(2.0, len(shared_tags))
+                reasons.append(f"shared tags {', '.join(sorted(shared_tags)[:4])}")
+            if set(self._path_prefixes(learning.files_changed)) & memory_terms:
+                score += 1.0
+                reasons.append("shared project path terms")
+            if re.search(r"\b(failure|failed|guardrail|fix|pitfall|approval|verify|before|do not)\b", memory["body"].lower()):
+                score += 1.5
+                reasons.append("memory contains reusable caution language")
+            if score >= threshold and (best is None or score > best.score):
+                best = MemoryLinkCandidate(
+                    memory_record_id=memory["id"],
+                    memory_source=memory["source"],
+                    memory_title=memory["title"],
+                    learning_id=learning.id,
+                    skill_name=learning.skill_name or "",
+                    action="link",
+                    score=round(score, 3),
+                    reasons=reasons,
+                )
+        return best
+
+    def _memory_create_candidate(
+        self,
+        memory: dict[str, str],
+        catalog: list[SkillCatalogEntry],
+        threshold: float,
+    ) -> MemoryLinkCandidate | None:
+        memory_terms = self._terms(" ".join([memory["title"], memory["body"]]))
+        best: MemoryLinkCandidate | None = None
+        for entry in catalog:
+            skill_terms = self._terms(" ".join([entry.name, entry.description, " ".join(entry.tags)]))
+            shared_terms = memory_terms & skill_terms
+            score = min(4.0, len(shared_terms) * 0.5)
+            reasons = []
+            if entry.name in memory_terms:
+                score += 4.0
+                reasons.append(f"memory names catalog skill {entry.name}")
+            if shared_terms:
+                reasons.append(f"shared catalog terms {', '.join(sorted(shared_terms)[:8])}")
+            if re.search(r"\b(guardrail|failure|failed|fix|pitfall|before|verify|approval|use)\b", memory["body"].lower()):
+                score += 1.5
+                reasons.append("memory contains reusable skill guidance")
+            if score >= threshold and (best is None or score > best.score):
+                best = MemoryLinkCandidate(
+                    memory_record_id=memory["id"],
+                    memory_source=memory["source"],
+                    memory_title=memory["title"],
+                    skill_name=entry.name,
+                    action="create_learning",
+                    score=round(score, 3),
+                    reasons=reasons,
+                )
+        return best
+
+    def _apply_memory_link(self, candidate: MemoryLinkCandidate) -> None:
+        records = self._learning_records()
+        changed = False
+        for record in records:
+            if record.id != candidate.learning_id:
+                continue
+            before = record.model_dump(mode="json")
+            record.memory_record_ids = self._merge_ids(record.memory_record_ids, [candidate.memory_record_id])
+            changed = changed or record.model_dump(mode="json") != before
+            break
+        if changed:
+            self._write_learning_records(records)
+
+    def _create_learning_from_memory(
+        self,
+        candidate: MemoryLinkCandidate,
+        memories: list[dict[str, str]],
+    ) -> SkillLearning:
+        memory = next(item for item in memories if item["id"] == candidate.memory_record_id)
+        learning = SkillLearning(
+            title=f"Memory-derived guidance: {memory['title'][:130]}",
+            summary=memory["body"][:3900],
+            novelty=Novelty.GUARDRAIL,
+            outcome=Outcome.WORKED,
+            skill_name=candidate.skill_name or None,
+            evidence=[f"memory_source={memory['source']}", f"memory_record_id={memory['id']}"],
+            reusable_steps=self._extract_memory_steps(memory["body"]),
+            guardrails=self._extract_memory_guardrails(memory["body"]),
+            tags=["memory-derived", "ai-memory", candidate.skill_name] if candidate.skill_name else ["memory-derived", "ai-memory"],
+            reliability_impact="Imported from durable AI memory so future skill recommendations can surface prior context.",
+            memory_record_ids=[memory["id"]],
+        )
+        return self.capture_work_product(learning, create_drafts=False).learning
+
+    def _extract_memory_steps(self, body: str) -> list[str]:
+        steps = []
+        for line in body.splitlines():
+            clean = line.strip(" -*")
+            if re.search(r"\b(use|run|verify|check|record|inspect|create|register)\b", clean.lower()):
+                steps.append(clean[:240])
+        return list(dict.fromkeys(steps))[:10]
+
+    def _extract_memory_guardrails(self, body: str) -> list[str]:
+        guardrails = []
+        for line in body.splitlines():
+            clean = line.strip(" -*")
+            if re.search(r"\b(do not|never|before|must|avoid|failure|failed|blocked|approval|secret|token)\b", clean.lower()):
+                guardrails.append(clean[:240])
+        return list(dict.fromkeys(guardrails))[:10]
+
+    @staticmethod
+    def _memory_id(source: str, title: str, body: str) -> str:
+        return f"{source}:{sha256(f'{source}\\n{title}\\n{body}'.encode('utf-8')).hexdigest()[:32]}"
+
+    @staticmethod
+    def _looks_sensitive(title: str, body: str) -> bool:
+        text = f"{title}\n{body}".lower()
+        return bool(re.search(r"\b(passphrase|password|private key|api-token|api token|secret key|bearer token)\b", text))
 
     def _resolve_learning_lineage(self, learning: SkillLearning) -> SkillLearning:
         by_id = {record.id: record for record in self._learning_records()}

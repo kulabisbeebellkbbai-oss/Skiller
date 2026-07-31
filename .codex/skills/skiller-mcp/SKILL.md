@@ -31,6 +31,10 @@ When Skiller results affect the final answer, include brief evidence such as:
 - Use `get_learning_lineage` before proposing a process update from a known learning id so child corrections and follow-on guardrails are applied with the root workflow.
 - Use `scan_learning_lineage` after a batch of learnings or when records look related but unlinked; review dry-run candidates before lowering thresholds.
 - Use `lineage_scan_due` or the installed `skiller-lineage-scan.timer` for periodic maintenance so new iterations are connected over time.
+- Use `scan_memory_records` when AI memory may contain skill-relevant lessons that should be linked to Skiller learnings or imported as memory-derived guardrails.
+- Use `memory_scan_due` or the installed `skiller-memory-scan.timer` for periodic AI-memory association.
+- Use `get_learning_memory_context` when a learning has `memory_record_ids` and the thread needs to follow those links back to resolvable AI-memory summaries.
+- Use `record_overseer_guidance` for Overseer-provided expansion requests, and `apply_overseer_guidance` only applies bounded configuration actions whose `security_review_status` is `passed`.
 - Use `record_skill_run` when a named skill was used and the outcome is known.
 - Use `recommend_skills` before work where prior local skill history may affect tool choice.
 - Use `refresh_skill_catalog` to index installed or project-local `SKILL.md` files before relying on recommendations.
@@ -63,6 +67,8 @@ When Skiller results affect the final answer, include brief evidence such as:
 - If a thread id is known, attach it to both the correction and the corrected learning through Skiller lineage metadata.
 - Scanner-applied links must be explainable with shared skill, tags, terms, paths, thread IDs, or correction timing; do not silently link unrelated records.
 - Before a thread repeats a process, inspect `get_learning_lineage` or a relevant skill profile so prior follow-on issues and environment-specific resources are visible.
+- AI-memory association must preserve provenance through `memory_record_ids` and avoid bulk-importing rollout logs, passphrases, secrets, or raw private memory dumps.
+- Overseer guidance may expand scanner behavior only through reviewed, bounded configuration actions; unreviewed or failed security reviews remain recorded but unapplied.
 
 ## Fallback
 

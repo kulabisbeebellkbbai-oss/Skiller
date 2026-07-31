@@ -43,6 +43,7 @@ class SkillLearning(BaseModel):
     corrects_learning_ids: list[str] = Field(default_factory=list, max_length=20)
     child_learning_ids: list[str] = Field(default_factory=list, max_length=100)
     correction_learning_ids: list[str] = Field(default_factory=list, max_length=100)
+    memory_record_ids: list[str] = Field(default_factory=list, max_length=100)
 
     @field_validator("skill_name")
     @classmethod
@@ -63,6 +64,7 @@ class SkillLearning(BaseModel):
         "corrects_learning_ids",
         "child_learning_ids",
         "correction_learning_ids",
+        "memory_record_ids",
     )
     @classmethod
     def strip_lists(cls, value: list[str]) -> list[str]:
@@ -219,6 +221,61 @@ class LineageScanResult(BaseModel):
     dry_run: bool
     generated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     links: list[LineageLinkCandidate] = Field(default_factory=list, max_length=500)
+
+
+class MemoryLinkCandidate(BaseModel):
+    memory_record_id: str
+    memory_source: str
+    memory_title: str
+    learning_id: str = ""
+    skill_name: str = ""
+    action: Literal["link", "create_learning"]
+    score: float
+    reasons: list[str] = Field(default_factory=list, max_length=20)
+    applied: bool = False
+
+    @field_validator("reasons")
+    @classmethod
+    def strip_reasons(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item and item.strip()))
+
+
+class MemoryScanResult(BaseModel):
+    scanned_memories: int
+    scanned_learnings: int
+    candidates: int
+    linked: int
+    created: int
+    threshold: float
+    dry_run: bool
+    generated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    links: list[MemoryLinkCandidate] = Field(default_factory=list, max_length=500)
+
+
+class OverseerGuidance(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    source: str = Field(default="overseer", max_length=120)
+    title: str = Field(min_length=3, max_length=160)
+    recommendation: str = Field(min_length=10, max_length=4000)
+    security_review_status: Literal["pending", "passed", "failed"] = "pending"
+    security_review_evidence: list[str] = Field(default_factory=list, max_length=25)
+    action: Literal[
+        "add_memory_query",
+        "set_memory_scan_threshold",
+        "set_memory_scan_limit",
+        "enable_private_memory_search",
+        "disable_private_memory_search",
+        "note_only",
+    ] = "note_only"
+    value: str = Field(default="", max_length=1000)
+    applied: bool = False
+    applied_at: str = ""
+
+    @field_validator("security_review_evidence")
+    @classmethod
+    def strip_evidence(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item and item.strip()))
 
 
 JsonDict = dict[str, Any]

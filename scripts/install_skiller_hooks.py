@@ -19,6 +19,9 @@ SERVICE_NAME = "skiller-mcp.service"
 LINEAGE_SERVICE_NAME = "skiller-lineage-scan.service"
 LINEAGE_TIMER_NAME = "skiller-lineage-scan.timer"
 LINEAGE_PATH_NAME = "skiller-lineage-scan.path"
+MEMORY_SERVICE_NAME = "skiller-memory-scan.service"
+MEMORY_TIMER_NAME = "skiller-memory-scan.timer"
+MEMORY_PATH_NAME = "skiller-memory-scan.path"
 
 
 def load_hooks(path: Path) -> dict[str, Any]:
@@ -125,6 +128,50 @@ WantedBy=default.target
     return service_path, timer_path, path_path
 
 
+def install_memory_timer(service_dir: Path, python_bin: Path, data_dir: Path) -> tuple[Path, Path, Path]:
+    service_dir.mkdir(parents=True, exist_ok=True)
+    service_path = service_dir / MEMORY_SERVICE_NAME
+    timer_path = service_dir / MEMORY_TIMER_NAME
+    path_path = service_dir / MEMORY_PATH_NAME
+    scanner_path = PROJECT_ROOT / "scripts" / "run_memory_scan.py"
+    memory_registry = Path.home() / ".codex" / "memories" / "MEMORY.md"
+    service_text = f"""[Unit]
+Description=Skiller AI memory association scan
+
+[Service]
+Type=oneshot
+WorkingDirectory={PROJECT_ROOT}
+ExecStart="{python_bin}" "{scanner_path}" --data-dir "{data_dir}" --threshold 8.0 --limit 100 --apply
+"""
+    timer_text = f"""[Unit]
+Description=Run Skiller AI memory association scan periodically
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=6h
+AccuracySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"""
+    path_text = f"""[Unit]
+Description=Run Skiller AI memory scan when local memory or learning records change
+
+[Path]
+PathChanged={memory_registry}
+PathChanged={data_dir / 'learnings.jsonl'}
+Unit={MEMORY_SERVICE_NAME}
+
+[Install]
+WantedBy=default.target
+"""
+    service_path.write_text(service_text, encoding="utf-8")
+    timer_path.write_text(timer_text, encoding="utf-8")
+    path_path.write_text(path_text, encoding="utf-8")
+    return service_path, timer_path, path_path
+
+
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, capture_output=True, check=False)
 
@@ -135,6 +182,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-service", action="store_true")
     parser.add_argument("--skip-lineage-timer", action="store_true")
+    parser.add_argument("--skip-memory-timer", action="store_true")
     args = parser.parse_args()
 
     codex_home = args.codex_home.expanduser().resolve()
@@ -154,6 +202,9 @@ def main() -> int:
     lineage_service_path = Path.home() / ".config" / "systemd" / "user" / LINEAGE_SERVICE_NAME
     lineage_timer_path = Path.home() / ".config" / "systemd" / "user" / LINEAGE_TIMER_NAME
     lineage_path_path = Path.home() / ".config" / "systemd" / "user" / LINEAGE_PATH_NAME
+    memory_service_path = Path.home() / ".config" / "systemd" / "user" / MEMORY_SERVICE_NAME
+    memory_timer_path = Path.home() / ".config" / "systemd" / "user" / MEMORY_TIMER_NAME
+    memory_path_path = Path.home() / ".config" / "systemd" / "user" / MEMORY_PATH_NAME
 
     if args.dry_run:
         print(json.dumps({
@@ -167,6 +218,10 @@ def main() -> int:
             "lineage_timer_path": str(lineage_timer_path),
             "lineage_path_path": str(lineage_path_path),
             "would_install_lineage_timer": not args.skip_lineage_timer,
+            "memory_service_path": str(memory_service_path),
+            "memory_timer_path": str(memory_timer_path),
+            "memory_path_path": str(memory_path_path),
+            "would_install_memory_timer": not args.skip_memory_timer,
         }, indent=2))
         return 0
 
@@ -195,6 +250,14 @@ def main() -> int:
             "enable": run(["systemctl", "--user", "enable", "--now", LINEAGE_TIMER_NAME]).returncode,
             "path_enable": run(["systemctl", "--user", "enable", "--now", LINEAGE_PATH_NAME]).returncode,
         }
+    memory_timer_result = None
+    if not args.skip_memory_timer:
+        install_memory_timer(memory_service_path.parent, python_bin, data_dir)
+        memory_timer_result = {
+            "daemon_reload": run(["systemctl", "--user", "daemon-reload"]).returncode,
+            "enable": run(["systemctl", "--user", "enable", "--now", MEMORY_TIMER_NAME]).returncode,
+            "path_enable": run(["systemctl", "--user", "enable", "--now", MEMORY_PATH_NAME]).returncode,
+        }
 
     print(json.dumps({
         "installed_hook": str(hook_target),
@@ -207,6 +270,10 @@ def main() -> int:
         "lineage_timer": str(lineage_timer_path) if not args.skip_lineage_timer else None,
         "lineage_path": str(lineage_path_path) if not args.skip_lineage_timer else None,
         "lineage_timer_result": lineage_timer_result,
+        "memory_service": str(memory_service_path) if not args.skip_memory_timer else None,
+        "memory_timer": str(memory_timer_path) if not args.skip_memory_timer else None,
+        "memory_path": str(memory_path_path) if not args.skip_memory_timer else None,
+        "memory_timer_result": memory_timer_result,
         "review": "Run /hooks and trust the changed Skiller hook entries.",
     }, indent=2))
     return 0
